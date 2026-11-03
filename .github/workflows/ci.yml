@@ -16,11 +16,10 @@ jobs:
       - run: npx electron-builder --win --publish never
       - name: Запустить собранную программу
         shell: bash
-        env:
-          MN_SMOKE: smoke.txt
-          MN_USERDATA: smoke-data
         run: |
+          export MN_SMOKE="$(pwd -W)/smoke.txt" MN_USERDATA="$(pwd -W)/smoke-data"
           "dist/win-unpacked/Movie Night.exe" &
-          for i in $(seq 1 40); do [ -f smoke.txt ] && break; sleep 3; done
-          cat smoke.txt
+          for i in $(seq 1 30); do [ -f smoke.txt ] && break; sleep 3; done
+          cat smoke.txt || true
+          cat smoke-data/movie-night.log || true
           grep -q "Подключим TMDB" smoke.txt
