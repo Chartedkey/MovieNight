@@ -1,19 +1,30 @@
 name: Выпуск версии
+# Новая версия выходит, когда в main меняется номер версии в package.json.
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+    paths: [package.json]
 permissions:
   contents: write
 jobs:
   release:
     runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install
-      - run: npm test
-      - run: npm run release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Проверить, выпущена ли версия
+        id: check
+        shell: bash
+        run: |
+          V="v$(node -p "require('./package.json').version")"
+          if gh release view "$V" >/dev/null 2>&1; then echo "skip=true" >> "$GITHUB_OUTPUT"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.check.outputs.skip == 'false'
+        run: npm install
+      - if: steps.check.outputs.skip == 'false'
+        run: npm test
+      - if: steps.check.outputs.skip == 'false'
+        run: npm run release
