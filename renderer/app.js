@@ -1,6 +1,6 @@
 'use strict';
 const $app = document.getElementById('app');
-const api = window.api || { call: async () => { throw new Error('Не загрузился мост к программе (preload).'); }, onProgress() {}, onUpdate() {} };
+const bridge = window.api || { call: async () => { throw new Error('Не загрузился мост к программе (preload).'); }, onProgress() {}, onUpdate() {} };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ui = { screen: 'library', q: '', shown: 40, modal: null, menu: null, toast: null, progress: null, version: '', update: null, reviewQ: {}, reviewResults: {}, busy: false, error: null, hasKey: false, state: null, review: [] };
 const actions = {};
@@ -13,7 +13,7 @@ const filmMeta = (f) => [f.runtime ? `${f.runtime} мин` : null, (f.genres || 
 
 async function call(method, ...args) {
   try {
-    return await api.call(method, ...args);
+    return await bridge.call(method, ...args);
   } catch (e) {
     say(String(e.message || e).replace(/^Error invoking remote method 'api': (Error: )?/, ''));
     throw e;
@@ -36,7 +36,7 @@ function setupKey() {
   return `<div class="center"><img class="logo" src="logo.png" alt="Movie Night"><h1>Подключим TMDB</h1><div class="sub">Вставь ключ API или токен доступа из настроек своего аккаунта TMDB. Он хранится только на этом компьютере, в зашифрованном виде.</div><input id="key" class="field wide" type="password" autocomplete="off" aria-label="Ключ TMDB" placeholder="Ключ TMDB">${ui.error ? `<div class="error">${esc(ui.error)}</div>` : ''}<button class="btn primary" data-a="${on(async () => {
     const v = document.getElementById('key').value;
     ui.error = null; ui.busy = true; render();
-    try { await api.call('setKey', v); ui.hasKey = true; } catch (e) { ui.error = String(e.message || e).replace(/^.*?Error: /, ''); }
+    try { await bridge.call('setKey', v); ui.hasKey = true; } catch (e) { ui.error = String(e.message || e).replace(/^.*?Error: /, ''); }
     ui.busy = false; render();
   })}" ${ui.busy ? 'disabled' : ''}>${ui.busy ? 'Проверяю…' : 'Проверить и сохранить'}</button></div>`;
 }
@@ -48,7 +48,7 @@ function setupSeed() {
 async function startImport() {
   ui.progress = await call('progress');
   render();
-  await api.call('runImport');
+  await bridge.call('runImport');
   ui.review = await call('reviewList');
   ui.progress = await call('progress');
   await refresh();
@@ -248,14 +248,14 @@ document.addEventListener('dragstart', (e) => { const r = e.target.closest('[dat
 document.addEventListener('dragover', (e) => { if (e.target.closest('[data-entry]')) e.preventDefault(); });
 document.addEventListener('drop', (e) => { const r = e.target.closest('[data-entry]'); if (r && dragFrom) { e.preventDefault(); doState('moveNear', dragFrom, Number(r.dataset.idx)); dragFrom = null; } });
 
-api.onProgress((p) => { ui.progress = p; if (ui.state && ui.state.job && !['review', 'done'].includes(ui.state.job.phase)) render(); });
-api.onUpdate((u) => { ui.update = u; render(); });
+bridge.onProgress((p) => { ui.progress = p; if (ui.state && ui.state.job && !['review', 'done'].includes(ui.state.job.phase)) render(); });
+bridge.onUpdate((u) => { ui.update = u; render(); });
 
 (async function start() {
-  ui.version = await api.call('version');
-  ui.hasKey = await api.call('hasKey');
-  ui.state = await api.call('getState');
-  ui.review = ui.state.job ? await api.call('reviewList') : [];
-  ui.progress = ui.state.job ? await api.call('progress') : null;
+  ui.version = await bridge.call('version');
+  ui.hasKey = await bridge.call('hasKey');
+  ui.state = await bridge.call('getState');
+  ui.review = ui.state.job ? await bridge.call('reviewList') : [];
+  ui.progress = ui.state.job ? await bridge.call('progress') : null;
   render();
 }()).catch(fatal);
