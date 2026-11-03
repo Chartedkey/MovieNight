@@ -256,6 +256,10 @@ function render() {
 function renderInner() {
   if (!ui.state) return;
   Object.keys(actions).forEach((k) => delete actions[k]);
+  // Перерисовка не должна сбрасывать положение прокрутки.
+  const shadeBefore = document.querySelector('.shade');
+  const shadeTop = shadeBefore ? shadeBefore.scrollTop : 0;
+  const pageTop = window.scrollY;
   const focus = document.activeElement && document.activeElement.id;
   const caret = focus && document.activeElement.selectionStart;
   const gate = screenGate();
@@ -267,6 +271,9 @@ function renderInner() {
   }
   const mdl = ui.modal && ui.modal.type === 'rename' ? renameModal() : modal();
   $app.innerHTML = `<div class="app">${html}${mdl}${menu()}${ui.toast ? `<div class="toast" role="status">${esc(ui.toast)}</div>` : ''}</div>`;
+  const shadeAfter = document.querySelector('.shade');
+  if (shadeAfter && shadeBefore) shadeAfter.scrollTop = shadeTop;
+  window.scrollTo(0, pageTop);
   if (focus) { const el = document.getElementById(focus); if (el) { el.focus(); try { el.setSelectionRange(caret, caret); } catch (e) { /* поле без курсора */ } } }
 }
 
