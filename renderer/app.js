@@ -2,7 +2,7 @@
 const $app = document.getElementById('app');
 const bridge = window.api || { call: async () => { throw new Error('Не загрузился мост к программе (preload).'); }, onProgress() {}, onUpdate() {} };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const ui = { screen: 'library', q: '', shown: 40, modal: null, menu: null, toast: null, progress: null, version: '', update: null, reviewQ: {}, reviewResults: {}, busy: false, error: null, hasKey: false, state: null, review: [], reviewShown: 12, candInfo: {}, candLoading: false, rescue: null };
+const ui = { screen: 'library', q: '', shown: 40, modal: null, menu: null, toast: null, progress: null, version: '', update: null, reviewQ: {}, reviewResults: {}, busy: false, error: null, hasKey: false, state: null, review: [], reviewShown: 12, reviewPeople: {}, reviewNote: {}, candInfo: {}, candLoading: false, rescue: null };
 const actions = {};
 let actionSeq = 0;
 
@@ -131,10 +131,19 @@ function review() {
   const list = ui.review.slice(0, ui.reviewShown);
   const rows = list.map((r) => {
     const results = ui.reviewResults[r.id] || r.cands;
-    return `<section class="card"><div><h2>${esc(r.title)}${r.year ? ` (${r.year})` : ''}</h2><div class="sub warn">${esc(r.why)}</div>${r.mates.length ? `<div class="sub">В этой же строке: ${esc(r.mates.join(', '))}</div>` : ''}${r.source ? `<div class="sub">Из списка: ${esc(r.source)}</div>` : ''}</div><div class="list">${results.map((c) => candHtml(r, c)).join('') || '<div class="sub">Вариантов нет. Попробуй поискать иначе.</div>'}</div><div class="row"><input class="field" id="revq${r.id}" data-revq="${r.id}" aria-label="Поиск в TMDB" placeholder="Другое название" value="${esc(ui.reviewQ[r.id] || '')}"><button class="btn" data-a="${on(async () => { ui.reviewResults[r.id] = await call('searchForReview', ui.reviewQ[r.id] || r.title); render(); loadCandInfo(); })}">Найти</button>${r.link ? `<button class="btn ghost" data-a="${on(() => call('openExternal', r.link))}">Кинопоиск</button>` : ''}<button class="btn ghost" data-a="${on(async () => { ui.review = await call('skipItem', r.id); await refresh(); })}">Пропустить</button></div></section>`;
+    return `<section class="card"><div><h2>${esc(r.title)}${r.year ? ` (${r.year})` : ''}</h2><div class="sub warn">${esc(r.why)}</div>${r.mates.length ? `<div class="sub">В этой же строке: ${esc(r.mates.join(', '))}</div>` : ''}${r.source ? `<div class="sub">Из списка: ${esc(r.source)}</div>` : ''}</div><div class="list">${results.map((c) => candHtml(r, c)).join('') || '<div class="sub">Вариантов нет. Попробуй поискать иначе.</div>'}</div>${(ui.reviewPeople[r.id] || []).map((p) => `<button class="btn ghost" data-a="${on(async () => { ui.reviewResults[r.id] = await call('directorFilms', p.id); ui.reviewNote[r.id] = `Фильмы режиссёра: ${p.name}`; ui.reviewPeople[r.id] = []; render(); loadCandInfo(); })}">Показать фильмы режиссёра: ${esc(p.name)}</button>`).join('')}${ui.reviewNote[r.id] ? `<div class="sub">${esc(ui.reviewNote[r.id])}</div>` : ''}<div class="row"><input class="field" id="revq${r.id}" data-revq="${r.id}" aria-label="Поиск в TMDB" placeholder="Название, режиссёр или ссылка TMDB" value="${esc(ui.reviewQ[r.id] || '')}"><button class="btn" data-a="${on(() => searchReview(r.id, r.title))}">Найти</button>${r.link ? `<button class="btn ghost" data-a="${on(() => call('openExternal', r.link))}">Кинопоиск</button>` : ''}<button class="btn ghost" data-a="${on(async () => { ui.review = await call('skipItem', r.id); await refresh(); })}">Пропустить</button></div></section>`;
   }).join('');
   const banner = ui.rescue === 'running' ? '<div class="notice">Ищу спорные фильмы в фильмографиях режиссёров из той же строки таблицы…</div>' : (ui.rescue ? `<div class="notice">Автоматически разобрано: ${ui.rescue.resolved}. Осталось: ${ui.rescue.left}.</div>` : '');
   return `<div class="head"><div><h1>Спорные строки</h1><div class="sub">Осталось: ${ui.review.length}. Подтверди нужный фильм, остальное программа уже приняла сама.</div></div></div>${banner}<div class="grid wide">${rows || '<div class="card sub">Спорных строк нет.</div>'}</div>${ui.review.length > ui.reviewShown ? `<button class="btn" data-a="${on(() => { ui.reviewShown += PAGE; render(); loadCandInfo(); })}">Показать ещё</button>` : ''}`;
+}
+async function searchReview(id, fallback) {
+  const q = ui.reviewQ[id] || fallback;
+  const res = await call('searchForReview', q);
+  ui.reviewResults[id] = res.cands;
+  ui.reviewPeople[id] = res.people;
+  ui.reviewNote[id] = res.cands.length || res.people.length ? `Результаты поиска: ${q}` : `По запросу «${q}» ничего не нашлось`;
+  render();
+  loadCandInfo();
 }
 async function loadCandInfo() {
   if (ui.candLoading) return;
@@ -293,6 +302,7 @@ document.addEventListener('input', (e) => {
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && e.target.id === 'addq') call('searchAdd', ui.modal.q).then((r) => { ui.modal.results = r; render(); });
+  if (e.key === 'Enter' && e.target.dataset.revq) { const r = ui.review.find((x) => String(x.id) === e.target.dataset.revq); if (r) searchReview(r.id, r.title); }
   if (e.key === 'Escape' && ui.menu) { ui.menu = null; render(); }
 });
 let dragFrom = null;

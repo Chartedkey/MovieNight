@@ -165,6 +165,30 @@ test('спорный фильм находится в фильмографии �
   assert.equal(s.getState().films.m22.dir, 40);
 });
 
+test('ручной поиск понимает год в скобках и ссылку TMDB', async () => {
+  const t = fakeTmdb([{ id: 31, title: 'The Good Life', year: 2007, directors: [[50, 'Режиссёр']] }, { id: 32, title: 'The Good Life', year: 1996, directors: [[51, 'Другой']] }]);
+  const s = new Service({ dir: tmp(), tmdb: t });
+  const r = await s.searchForReview('The Good Life (2007)');
+  assert.equal(r.cands[0].id, 31);
+  assert.equal((await s.searchForReview('The Good Life 2007')).cands[0].id, 31);
+  assert.equal((await s.searchForReview('https://www.themoviedb.org/movie/32?language=ru-RU')).cands[0].id, 32);
+});
+
+test('подтверждение одного фильма ищет второй у того же режиссёра', async () => {
+  const movies = [{ id: 41, title: 'Virgin Stripped Bare by Her Bachelors', year: 2000, directors: [[60, 'Хон Сан Су']] }, { id: 42, title: 'Woman Is the Future of Man', year: 2004, directors: [[60, 'Хон Сан Су']] }];
+  const t = fakeTmdb(movies, { 60: [{ id: 41, title: movies[0].title, original_title: movies[0].title, job: 'Director', release_date: '2000-01-01' }, { id: 42, title: movies[1].title, original_title: movies[1].title, job: 'Director', release_date: '2004-01-01' }] });
+  const s = new Service({ dir: tmp(), tmdb: t });
+  s.loadSeed({ skipped: [], near: [], groups: [{ row: 2, films: [{ title: 'О! Су-джон!', year: 2000 }, { title: 'Женщина — это будущее мужчины', year: 2004 }] }] });
+  await s.runImport();
+  assert.equal(s.reviewList().length, 2);
+  const list = await s.resolveItem(0, 41);
+  assert.equal(list.length, 0);
+  const st = s.getState();
+  assert.equal(st.films.m41.userTitle, 'О! Су-джон!');
+  assert.equal(st.films.m42.userTitle, 'Женщина — это будущее мужчины');
+  assert.equal(st.films.m42.dir, 60);
+});
+
 test('неверный файл начальных данных отклоняется', () => {
   const s = new Service({ dir: tmp() });
   assert.throws(() => s.loadSeed({ foo: 1 }));

@@ -326,6 +326,7 @@ class Service {
     it.tmdbId = tmdbId;
     it.status = 'auto';
     it.dirIds = d.directors.map((x) => x.id);
+    await this.resolveMates(it, d);
     this.applyResolved();
     this.finishReviewIfDone();
     this.save();
@@ -404,9 +405,57 @@ class Service {
     return { resolved, left: this.reviewList().length };
   }
 
+  // Понимает название с годом, ссылку на страницу TMDB и имя режиссёра.
   async searchForReview(query) {
-    const r = await this.tmdb.searchMovie(query);
-    return rank(query, null, r.results);
+    const q = String(query || '').trim();
+    const link = q.match(/themoviedb\.org\/movie\/(\d+)/);
+    if (link) {
+      const d = await this.detail(Number(link[1]));
+      return { cands: [{ id: d.id, title: d.displayTitle, originalTitle: d.originalTitle, year: d.year, score: 100 }], people: [] };
+    }
+    const m = q.match(/^(.+?)[\s,]*\(?\b((?:18|19|20)\d\d)\)?\s*$/);
+    const title = m ? m[1].trim() : q;
+    const year = m ? Number(m[2]) : null;
+    const cands = await searchFilm(this.tmdb, title, year);
+    let people = [];
+    try {
+      const p = await this.tmdb.searchPerson(title);
+      people = (p.results || []).filter((x) => x.known_for_department === 'Directing').slice(0, 3).map((x) => ({ id: x.id, name: x.name }));
+    } catch (e) {
+      if (e.kind === 'auth' || e.kind === 'network') throw e;
+    }
+    return { cands, people };
+  }
+
+  async directorFilms(personId) {
+    const c = await this.tmdb.credits(personId);
+    const seen = new Set();
+    return (c.crew || []).filter((x) => x.job === 'Director' && !x.video && !seen.has(x.id) && seen.add(x.id))
+      .map((x) => ({ id: x.id, title: x.title, originalTitle: x.original_title, year: yearOf(x), score: 0 }))
+      .sort((a, b) => (a.year || 9999) - (b.year || 9999));
+  }
+
+  // Когда фильм строки подтверждён, остальные фильмы строки ищутся у того же режиссёра.
+  async resolveMates(it, d) {
+    const j = this.state.job;
+    if (typeof it.id === 'string' || !d.directors.length) return;
+    const g = j.groups.find((x) => x.itemIds.includes(it.id));
+    if (!g) return;
+    const others = g.itemIds.map((i) => j.items[i]).filter((o) => o !== it && o.status === 'review');
+    if (!others.length) return;
+    const dir = d.directors[0];
+    const films = await this.directorFilms(dir.id);
+    it.groupDir = dir.id;
+    for (const o of others) {
+      const hit = o.year ? findInFilmography(films.map((f) => ({ id: f.id, title: f.title, original_title: f.originalTitle, release_date: f.year ? `${f.year}-01-01` : '' })), o.title, o.year) : null;
+      if (hit) {
+        await this.detail(hit.id);
+        Object.assign(o, { tmdbId: hit.id, status: 'auto', groupDir: dir.id, dirIds: [dir.id], applied: false });
+      } else if (films.length) {
+        o.cands = films.slice().sort((x, y) => Math.abs((x.year || 0) - (o.year || 0)) - Math.abs((y.year || 0) - (o.year || 0))).slice(0, 6);
+        o.why = `Выбери среди фильмов режиссёра: ${dir.name}`;
+      }
+    }
   }
 
   finishReviewIfDone() {
