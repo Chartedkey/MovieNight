@@ -14,3 +14,13 @@ jobs:
       - run: npm install
       - run: npm test
       - run: npx electron-builder --win --publish never
+      - name: Запустить собранную программу
+        shell: bash
+        env:
+          MN_SMOKE: smoke.txt
+          MN_USERDATA: smoke-data
+        run: |
+          "dist/win-unpacked/Movie Night.exe" &
+          for i in $(seq 1 40); do [ -f smoke.txt ] && break; sleep 3; done
+          cat smoke.txt
+          grep -q "Подключим TMDB" smoke.txt

@@ -9,6 +9,15 @@ const { createTmdb } = require('../src/tmdb');
 let win;
 let service;
 
+// Журнал ошибок рядом с данными: по нему можно понять, что случилось на компьютере пользователя.
+function logLine(text) {
+  try {
+    fs.appendFileSync(path.join(app.getPath('userData'), 'movie-night.log'), `${new Date().toISOString()} ${text}\n`);
+  } catch (e) { /* журнал не должен мешать работе */ }
+}
+process.on('uncaughtException', (e) => logLine(`main: ${e.stack || e}`));
+process.on('unhandledRejection', (e) => logLine(`main: ${(e && e.stack) || e}`));
+
 const keyFile = () => path.join(app.getPath('userData'), 'tmdb.key');
 
 function readKey() {
@@ -50,6 +59,7 @@ const local = {
     if (/^https:\/\/(www\.)?kinopoisk\.ru\//.test(url) || /^https:\/\/(www\.)?themoviedb\.org\//.test(url)) await shell.openExternal(url);
   },
   async version() { return app.getVersion(); },
+  async logPath() { return path.join(app.getPath('userData'), 'movie-night.log'); },
   async installUpdate() { autoUpdater.quitAndInstall(); },
 };
 
@@ -61,6 +71,8 @@ function setupUpdates() {
   autoUpdater.on('error', () => {});
   autoUpdater.checkForUpdatesAndNotify().catch(() => {});
 }
+
+if (process.env.MN_USERDATA) app.setPath('userData', process.env.MN_USERDATA);
 
 app.whenReady().then(() => {
   const dir = path.join(app.getPath('userData'), 'data');
@@ -79,8 +91,23 @@ app.whenReady().then(() => {
     icon: path.join(__dirname, '..', 'build', 'icon.png'), autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true },
   });
+  win.webContents.on('preload-error', (_e, p, err) => logLine(`preload ${p}: ${err.stack || err}`));
+  win.webContents.on('console-message', (_e, level, message, line, source) => { if (level >= 2) logLine(`renderer ${source}:${line} ${message}`); });
+  win.webContents.on('render-process-gone', (_e, d) => logLine(`renderer gone: ${d.reason}`));
+  win.webContents.on('before-input-event', (_e, input) => { if (input.type === 'keyDown' && input.key === 'F12') win.webContents.toggleDevTools(); });
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
-  win.webContents.once('did-finish-load', setupUpdates);
+  win.webContents.once('did-finish-load', () => {
+    setupUpdates();
+    if (process.env.MN_SMOKE) {
+      setTimeout(async () => {
+        const text = await win.webContents.executeJavaScript('document.getElementById("app").innerText + " | api=" + typeof window.api').catch((e) => `ERR ${e}`);
+        let log = '';
+        try { log = fs.readFileSync(path.join(app.getPath('userData'), 'movie-night.log'), 'utf8'); } catch (e) { /* журнала нет */ }
+        fs.writeFileSync(process.env.MN_SMOKE, `TEXT: ${text}\nLOG: ${log}\n`);
+        app.quit();
+      }, 5000);
+    }
+  });
 });
 
 app.on('window-all-closed', () => app.quit());

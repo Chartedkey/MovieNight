@@ -1,6 +1,6 @@
 'use strict';
-const api = window.api;
 const $app = document.getElementById('app');
+const api = window.api || { call: async () => { throw new Error('Не загрузился мост к программе (preload).'); }, onProgress() {}, onUpdate() {} };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ui = { screen: 'library', q: '', shown: 40, modal: null, menu: null, toast: null, progress: null, version: '', update: null, reviewQ: {}, reviewResults: {}, busy: false, error: null, hasKey: false, state: null, review: [] };
 const actions = {};
@@ -190,7 +190,19 @@ function renameModal() {
   return `<div class="shade"><div class="modal" role="dialog" aria-modal="true" aria-label="Изменить название"><h2>Изменить название</h2><div class="sub">Оригинальное: ${esc(f.originalTitle || '')}. Твоё название сохранится только в программе.</div><input id="ren" class="field wide" aria-label="Название" value="${esc(titleOf(f))}"><div class="row"><button class="btn primary" data-a="${on(async () => { const v = document.getElementById('ren').value; ui.modal = null; await doState('setTitle', f.key, v); })}">Сохранить</button><button class="btn ghost" data-a="${on(() => { ui.modal = null; render(); })}">Отмена</button></div></div></div>`;
 }
 
+function fatal(err) {
+  const msg = String((err && (err.stack || err.message)) || err);
+  console.error(msg);
+  $app.innerHTML = `<div class="main"><div class="center"><h1>Программа столкнулась с ошибкой</h1><div class="sub">Твои данные не пострадали. Пришли этот текст в чат:</div><div class="error" style="white-space:pre-wrap;user-select:text">${esc(msg)}</div></div></div>`;
+}
+window.addEventListener('error', (e) => fatal(e.error || e.message));
+window.addEventListener('unhandledrejection', (e) => { if (!ui.state) fatal(e.reason); });
+
 function render() {
+  try { renderInner(); } catch (e) { fatal(e); }
+}
+
+function renderInner() {
   if (!ui.state) return;
   Object.keys(actions).forEach((k) => delete actions[k]);
   const focus = document.activeElement && document.activeElement.id;
@@ -240,10 +252,10 @@ api.onProgress((p) => { ui.progress = p; if (ui.state && ui.state.job && !['revi
 api.onUpdate((u) => { ui.update = u; render(); });
 
 (async function start() {
-  ui.version = await call('version');
-  ui.hasKey = await call('hasKey');
-  await refresh();
-  ui.review = ui.state.job ? await call('reviewList') : [];
-  ui.progress = ui.state.job ? await call('progress') : null;
+  ui.version = await api.call('version');
+  ui.hasKey = await api.call('hasKey');
+  ui.state = await api.call('getState');
+  ui.review = ui.state.job ? await api.call('reviewList') : [];
+  ui.progress = ui.state.job ? await api.call('progress') : null;
   render();
-}());
+}()).catch(fatal);
