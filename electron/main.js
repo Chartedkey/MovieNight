@@ -37,7 +37,7 @@ function writeKey(key) {
 const makeTmdb = (key) => createTmdb({ key, fetchImpl: (url, opts) => net.fetch(url, opts) });
 
 // Методы, которые может вызывать интерфейс. Остальное в процесс не проникает.
-const SERVICE_METHODS = new Set(['getState', 'loadSeed', 'runImport', 'stopImport', 'progress', 'reviewList', 'resolveItem', 'skipItem', 'searchForReview', 'setFilmStatus', 'rate', 'toggleRewatch', 'finishReview', 'setTitle', 'toggleFav', 'ban', 'addNear', 'removeNear', 'moveNear', 'filmography', 'markFilm', 'finishMarkup', 'chooseNext', 'searchAdd', 'addFilm', 'addDirector']);
+const SERVICE_METHODS = new Set(['getState', 'loadSeed', 'runImport', 'stopImport', 'progress', 'reviewList', 'resolveItem', 'skipItem', 'searchForReview', 'candidateInfo', 'rescueReview', 'setFilmStatus', 'rate', 'toggleRewatch', 'finishReview', 'setTitle', 'toggleFav', 'ban', 'addNear', 'removeNear', 'moveNear', 'filmography', 'markFilm', 'finishMarkup', 'chooseNext', 'searchAdd', 'addFilm', 'addDirector']);
 
 const local = {
   async hasKey() { return !!service.tmdb; },

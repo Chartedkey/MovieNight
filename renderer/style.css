@@ -44,3 +44,12 @@ h1{margin:0;font-size:30px;font-weight:800}h2{margin:0;font-size:18px;font-weigh
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:40;max-width:680px;background:var(--text);color:var(--ink);padding:12px 16px;border-radius:10px;font-size:13px;font-weight:700}
 .error{background:#3b2a20;border:1px solid #8a5a3c;border-radius:10px;padding:12px 14px;font-size:14px}
 .drag{cursor:grab}
+.poster{width:46px;height:69px;flex:none;border-radius:5px;object-fit:cover;background:#30353c;display:block}
+.poster.big{width:76px;height:114px}
+.noposter{width:46px;height:69px;flex:none;border-radius:5px;background:#30353c;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:10px;text-align:center;padding:3px}
+.noposter.big{width:76px;height:114px}
+.fwrap{display:flex;gap:12px;align-items:flex-start;flex:1;min-width:220px}
+.film.choice{align-items:flex-start;flex-wrap:nowrap}
+.overview{font-size:12px;color:var(--muted);line-height:1.4;margin-top:5px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.notice{background:#2a2620;border:1px solid #5a4620;border-radius:10px;padding:12px 14px;font-size:14px}
+.grid.wide{grid-template-columns:repeat(auto-fill,minmax(440px,1fr))}

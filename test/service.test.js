@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { Service } = require('../src/service');
+const { Service, findInFilmography } = require('../src/service');
 const { rank, isConfident, score } = require('../src/matcher');
 const { createTmdb } = require('../src/tmdb');
 const { fakeTmdb } = require('./fake-tmdb');
@@ -46,6 +46,14 @@ async function imported() {
   await s.runImport();
   return s;
 }
+
+test('поиск в фильмографии не угадывает при неоднозначности', () => {
+  const list = [{ id: 1, title: 'А', release_date: '2000-01-01' }, { id: 2, title: 'Б', release_date: '2000-05-01' }];
+  assert.equal(findInFilmography(list, 'Другое', 2000), null);
+  assert.equal(findInFilmography(list, 'Б', 2000).id, 2);
+  assert.equal(findInFilmography([{ id: 3, title: 'В', release_date: '1990-01-01' }], 'Другое', 1990).id, 3);
+  assert.equal(findInFilmography([{ id: 3, title: 'В', release_date: '1990-01-01' }], 'Другое', 1991), null);
+});
 
 test('название с годом распознаётся уверенно, омонимы нет', () => {
   const c = rank('Река', 1997, [{ id: 6, title: 'Река', release_date: '1997-01-01' }, { id: 7, title: 'Река', release_date: '1997-02-02' }]);
@@ -138,6 +146,23 @@ test('данные переживают перезапуск, импорт пр�
   await again.runImport();
   assert.equal(again.getState().job.phase, 'review');
   assert.equal(again.getState().films.m1.dir, 10);
+});
+
+test('спорный фильм находится в фильмографии режиссёра из той же строки', async () => {
+  const movies = [
+    { id: 21, title: 'Сказочник', year: 2001, directors: [[40, 'Тодд Солондз']] },
+    { id: 22, title: 'Fear, Anxiety and Depression', year: 1989, directors: [[40, 'Тодд Солондз']] },
+  ];
+  const t = fakeTmdb(movies, { 40: [{ id: 22, title: 'Fear, Anxiety and Depression', original_title: 'Fear, Anxiety and Depression', job: 'Director', release_date: '1989-01-01' }, { id: 21, title: 'Сказочник', original_title: 'Storytelling', job: 'Director', release_date: '2001-01-01' }] });
+  const s = new Service({ dir: tmp(), tmdb: t });
+  s.loadSeed({ skipped: [], near: [], groups: [{ row: 2, films: [{ title: 'Страх, тревога и депрессия', year: 1989 }, { title: 'Сказочник', year: 2001 }] }] });
+  await s.runImport();
+  assert.equal(s.reviewList().length, 2);
+  const r = await s.rescueReview();
+  assert.equal(r.left, 0);
+  assert.equal(s.getState().job.phase, 'done');
+  assert.equal(s.getState().films.m22.userTitle, 'Страх, тревога и депрессия', 'остаётся название пользователя');
+  assert.equal(s.getState().films.m22.dir, 40);
 });
 
 test('неверный файл начальных данных отклоняется', () => {

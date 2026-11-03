@@ -2,14 +2,17 @@
 const $app = document.getElementById('app');
 const bridge = window.api || { call: async () => { throw new Error('Не загрузился мост к программе (preload).'); }, onProgress() {}, onUpdate() {} };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const ui = { screen: 'library', q: '', shown: 40, modal: null, menu: null, toast: null, progress: null, version: '', update: null, reviewQ: {}, reviewResults: {}, busy: false, error: null, hasKey: false, state: null, review: [] };
+const ui = { screen: 'library', q: '', shown: 40, modal: null, menu: null, toast: null, progress: null, version: '', update: null, reviewQ: {}, reviewResults: {}, busy: false, error: null, hasKey: false, state: null, review: [], reviewShown: 12, candInfo: {}, candLoading: false, rescue: null };
 const actions = {};
 let actionSeq = 0;
 
 function on(fn) { const id = `a${++actionSeq}`; actions[id] = fn; return id; }
 const titleOf = (f) => f.userTitle || f.tmdbTitle || f.originalTitle || 'Без названия';
+const COUNTRY_RU = { 'United States of America': 'США', 'United Kingdom': 'Великобритания', France: 'Франция', Germany: 'Германия', Italy: 'Италия', Spain: 'Испания', Japan: 'Япония', 'South Korea': 'Южная Корея', China: 'Китай', 'Hong Kong': 'Гонконг', Taiwan: 'Тайвань', India: 'Индия', Iran: 'Иран', Russia: 'Россия', 'Soviet Union': 'СССР', Canada: 'Канада', Australia: 'Австралия', 'New Zealand': 'Новая Зеландия', Netherlands: 'Нидерланды', Belgium: 'Бельгия', Denmark: 'Дания', Sweden: 'Швеция', Norway: 'Норвегия', Finland: 'Финляндия', Ireland: 'Ирландия', Austria: 'Австрия', Switzerland: 'Швейцария', Poland: 'Польша', Czechoslovakia: 'Чехословакия', 'Czech Republic': 'Чехия', Hungary: 'Венгрия', Romania: 'Румыния', Greece: 'Греция', Turkey: 'Турция', Israel: 'Израиль', Mexico: 'Мексика', Brazil: 'Бразилия', Argentina: 'Аргентина', Yugoslavia: 'Югославия', Serbia: 'Сербия', Portugal: 'Португалия', Thailand: 'Таиланд', Iceland: 'Исландия' };
+const countryRu = (c) => COUNTRY_RU[c] || c;
+const posterHtml = (path, big) => (path ? `<img class="poster ${big ? 'big' : ''}" loading="lazy" alt="" src="https://image.tmdb.org/t/p/${big ? 'w185' : 'w92'}${esc(path)}">` : `<div class="noposter ${big ? 'big' : ''}">нет постера</div>`);
 const filmLine = (f) => `${esc(titleOf(f))}${f.year ? ` (${f.year})` : ''}`;
-const filmMeta = (f) => [f.runtime ? `${f.runtime} мин` : null, (f.genres || []).slice(0, 2).join(', ') || null, (f.countries || [])[0] || null].filter(Boolean).map(esc).join(' · ');
+const filmMeta = (f) => [f.runtime ? `${f.runtime} мин` : null, (f.genres || []).slice(0, 2).join(', ') || null, (f.countries || []).slice(0, 1).map(countryRu)[0] || null].filter(Boolean).map(esc).join(' · ');
 
 async function call(method, ...args) {
   try {
@@ -52,6 +55,10 @@ async function startImport() {
   ui.review = await call('reviewList');
   ui.progress = await call('progress');
   await refresh();
+  maybeRescue();
+}
+function maybeRescue() {
+  if (ui.state.job && ui.state.job.phase === 'review' && !ui.state.rescueDone && ui.hasKey) runRescue();
 }
 
 function importing() {
@@ -69,11 +76,11 @@ function navHtml() {
   const review = ui.review.length;
   const pending = films.filter((f) => f.pending).length;
   const items = [['library', 'Библиотека', 0], ...(review ? [['review', 'Спорные строки', review]] : []), ['near', 'Ближайшие', s.near.length], ['rewatch', 'Пересмотреть', films.filter((f) => f.rewatch).length], ['morning', 'Утренний разбор', pending], ['night', 'Собрать ночь', 0, true], ['disks', 'Диски', 0, true]];
-  return `<nav class="side" aria-label="Разделы"><img class="logo" src="logo.png" alt="Movie Night">${items.map((n) => `<button class="nav ${ui.screen === n[0] ? 'on' : ''}" ${n[3] ? 'disabled title="Следующий этап"' : ''} data-a="${on(async () => { ui.screen = n[0]; if (n[0] === 'review') ui.review = await call('reviewList'); render(); })}"><span>${n[1]}</span>${n[2] ? `<span class="badge">${n[2]}</span>` : n[3] ? '<span class="sub" style="font-size:11px">скоро</span>' : ''}</button>`).join('')}<div class="ver">Версия ${esc(ui.version)}${ui.update ? `<br>${ui.update.state === 'ready' ? `<button class="mini on" data-a="${on(() => call('installUpdate'))}">Установить ${esc(ui.update.version)}</button>` : `Загружается ${esc(ui.update.version)}`}` : ''}</div></nav>`;
+  return `<nav class="side" aria-label="Разделы"><img class="logo" src="logo.png" alt="Movie Night">${items.map((n) => `<button class="nav ${ui.screen === n[0] ? 'on' : ''}" ${n[3] ? 'disabled title="Следующий этап"' : ''} data-a="${on(async () => { ui.screen = n[0]; if (n[0] === 'review') ui.review = await call('reviewList'); render(); if (n[0] === 'review') loadCandInfo(); })}"><span>${n[1]}</span>${n[2] ? `<span class="badge">${n[2]}</span>` : n[3] ? '<span class="sub" style="font-size:11px">скоро</span>' : ''}</button>`).join('')}<div class="ver">Версия ${esc(ui.version)}${ui.update ? `<br>${ui.update.state === 'ready' ? `<button class="mini on" data-a="${on(() => call('installUpdate'))}">Установить ${esc(ui.update.version)}</button>` : `Загружается ${esc(ui.update.version)}`}` : ''}</div></nav>`;
 }
 
 function filmRow(f, extra = '') {
-  return `<div class="film" data-film="${f.key}"><div><div class="ftitle">${filmLine(f)}</div><div class="fmeta">${filmMeta(f)}</div></div><div class="row">${extra}<button class="mini" aria-label="Ещё действия" data-menu="${f.key}">Ещё</button></div></div>`;
+  return `<div class="film" data-film="${f.key}"><div class="fwrap">${posterHtml(f.poster)}<div><div class="ftitle">${filmLine(f)}</div><div class="fmeta">${filmMeta(f)}</div></div></div><div class="row">${extra}<button class="mini" aria-label="Ещё действия" data-menu="${f.key}">Ещё</button></div></div>`;
 }
 
 function library() {
@@ -98,7 +105,7 @@ function near() {
   const s = ui.state;
   const rows = s.near.map((e, i) => {
     const films = e.ids.map((k) => s.films[k]).filter(Boolean);
-    return `<div class="film drag" draggable="true" data-entry="${esc(e.key)}" data-idx="${i}"><div style="flex:1;min-width:280px">${films.map((f, j) => `<div data-film="${f.key}" style="${j ? 'margin-top:8px' : ''}"><div class="ftitle">${j ? '<span class="sub">или </span>' : ''}${filmLine(f)}</div><div class="fmeta">${esc((s.directors[f.dir] || {}).name || '')}${filmMeta(f) ? ` · ${filmMeta(f)}` : ''}</div></div>`).join('')}</div><div class="row"><button class="mini" aria-label="Выше" data-a="${on(() => doState('moveNear', e.key, i - 1))}">↑</button><button class="mini" aria-label="Ниже" data-a="${on(() => doState('moveNear', e.key, i + 1))}">↓</button><button class="mini" data-menu="${films[0].key}">Ещё</button></div></div>`;
+    return `<div class="film drag" draggable="true" data-entry="${esc(e.key)}" data-idx="${i}"><div style="flex:1;min-width:280px">${films.map((f, j) => `<div class="fwrap" data-film="${f.key}" style="${j ? 'margin-top:8px' : ''}">${posterHtml(f.poster)}<div><div class="ftitle">${j ? '<span class="sub">или </span>' : ''}${filmLine(f)}</div><div class="fmeta">${esc((s.directors[f.dir] || {}).name || '')}${filmMeta(f) ? ` · ${filmMeta(f)}` : ''}</div></div></div>`).join('')}</div><div class="row"><button class="mini" aria-label="Выше" data-a="${on(() => doState('moveNear', e.key, i - 1))}">↑</button><button class="mini" aria-label="Ниже" data-a="${on(() => doState('moveNear', e.key, i + 1))}">↓</button><button class="mini" data-menu="${films[0].key}">Ещё</button></div></div>`;
   }).join('');
   return `<div class="head"><div><h1>Ближайшие</h1><div class="sub">Перетаскивай строки мышью или меняй порядок стрелками. Варианты «или» стоят в одной строке: когда посмотришь один, строка уйдёт из списка.</div></div></div><div class="list">${rows || '<div class="card sub">Список пуст. Добавь фильм через правую кнопку в библиотеке.</div>'}</div>`;
 }
@@ -114,12 +121,47 @@ function morning() {
   return `<div class="head"><div><h1>Утренний разбор</h1><div class="sub">Задачи на перенос и удаление появятся здесь после подключения дисков.</div></div></div><div class="grid">${cards || '<div class="card sub">Задач нет.</div>'}</div>`;
 }
 
+const PAGE = 12;
+function candHtml(r, c) {
+  const i = ui.candInfo[c.id];
+  const meta = i ? [i.directors.join(', ') || 'режиссёр не указан', i.runtime ? `${i.runtime} мин` : null, (i.countries || [])[0] ? countryRu(i.countries[0]) : null].filter(Boolean).join(' · ') : 'Загружаю сведения…';
+  return `<div class="film choice"><div class="fwrap">${posterHtml(i && i.poster, true)}<div style="min-width:0"><div class="ftitle">${esc(c.title)}${c.year ? ` (${c.year})` : ''}</div><div class="fmeta">${esc(c.originalTitle || '')}</div><div class="fmeta">${esc(meta)}</div>${i && i.overview ? `<div class="overview">${esc(i.overview)}</div>` : ''}</div></div><button class="mini on" data-a="${on(async () => { ui.review = await call('resolveItem', r.id, c.id); await refresh(); loadCandInfo(); })}">Это он</button></div>`;
+}
 function review() {
-  const rows = ui.review.map((r) => {
+  const list = ui.review.slice(0, ui.reviewShown);
+  const rows = list.map((r) => {
     const results = ui.reviewResults[r.id] || r.cands;
-    return `<section class="card"><div><h2>${esc(r.title)}${r.year ? ` (${r.year})` : ''}</h2><div class="sub warn">${esc(r.why)}</div>${r.mates.length ? `<div class="sub">В этой же строке: ${esc(r.mates.join(', '))}</div>` : ''}${r.source ? `<div class="sub">Из списка: ${esc(r.source)}</div>` : ''}</div><div class="list">${results.map((c) => `<div class="film"><div><div class="ftitle">${esc(c.title)}${c.year ? ` (${c.year})` : ''}</div><div class="fmeta">${esc(c.originalTitle || '')}</div></div><button class="mini on" data-a="${on(async () => { ui.review = await call('resolveItem', r.id, c.id); await refresh(); })}">Это он</button></div>`).join('') || '<div class="sub">Вариантов нет. Попробуй поискать иначе.</div>'}</div><div class="row"><input class="field" data-revq="${r.id}" aria-label="Поиск в TMDB" placeholder="Другое название" value="${esc(ui.reviewQ[r.id] || '')}"><button class="btn" data-a="${on(async () => { ui.reviewResults[r.id] = await call('searchForReview', ui.reviewQ[r.id] || r.title); render(); })}">Найти</button>${r.link ? `<button class="btn ghost" data-a="${on(() => call('openExternal', r.link))}">Кинопоиск</button>` : ''}<button class="btn ghost" data-a="${on(async () => { ui.review = await call('skipItem', r.id); await refresh(); })}">Пропустить</button></div></section>`;
+    return `<section class="card"><div><h2>${esc(r.title)}${r.year ? ` (${r.year})` : ''}</h2><div class="sub warn">${esc(r.why)}</div>${r.mates.length ? `<div class="sub">В этой же строке: ${esc(r.mates.join(', '))}</div>` : ''}${r.source ? `<div class="sub">Из списка: ${esc(r.source)}</div>` : ''}</div><div class="list">${results.map((c) => candHtml(r, c)).join('') || '<div class="sub">Вариантов нет. Попробуй поискать иначе.</div>'}</div><div class="row"><input class="field" id="revq${r.id}" data-revq="${r.id}" aria-label="Поиск в TMDB" placeholder="Другое название" value="${esc(ui.reviewQ[r.id] || '')}"><button class="btn" data-a="${on(async () => { ui.reviewResults[r.id] = await call('searchForReview', ui.reviewQ[r.id] || r.title); render(); loadCandInfo(); })}">Найти</button>${r.link ? `<button class="btn ghost" data-a="${on(() => call('openExternal', r.link))}">Кинопоиск</button>` : ''}<button class="btn ghost" data-a="${on(async () => { ui.review = await call('skipItem', r.id); await refresh(); })}">Пропустить</button></div></section>`;
   }).join('');
-  return `<div class="head"><div><h1>Спорные строки</h1><div class="sub">Осталось: ${ui.review.length}. Подтверди нужный фильм, остальное программа уже приняла сама.</div></div></div><div class="grid">${rows || '<div class="card sub">Спорных строк нет.</div>'}</div>`;
+  const banner = ui.rescue === 'running' ? '<div class="notice">Ищу спорные фильмы в фильмографиях режиссёров из той же строки таблицы…</div>' : (ui.rescue ? `<div class="notice">Автоматически разобрано: ${ui.rescue.resolved}. Осталось: ${ui.rescue.left}.</div>` : '');
+  return `<div class="head"><div><h1>Спорные строки</h1><div class="sub">Осталось: ${ui.review.length}. Подтверди нужный фильм, остальное программа уже приняла сама.</div></div></div>${banner}<div class="grid wide">${rows || '<div class="card sub">Спорных строк нет.</div>'}</div>${ui.review.length > ui.reviewShown ? `<button class="btn" data-a="${on(() => { ui.reviewShown += PAGE; render(); loadCandInfo(); })}">Показать ещё</button>` : ''}`;
+}
+async function loadCandInfo() {
+  if (ui.candLoading) return;
+  ui.candLoading = true;
+  try {
+    for (const r of ui.review.slice(0, ui.reviewShown)) {
+      const ids = (ui.reviewResults[r.id] || r.cands).map((c) => c.id).filter((id) => !ui.candInfo[id]);
+      if (!ids.length) continue;
+      Object.assign(ui.candInfo, await bridge.call('candidateInfo', ids));
+      if (ui.screen === 'review') render();
+    }
+  } catch (e) {
+    say('TMDB не ответил: сведения о фильмах загрузятся позже.');
+  }
+  ui.candLoading = false;
+}
+async function runRescue() {
+  ui.rescue = 'running'; render();
+  try {
+    ui.rescue = await bridge.call('rescueReview');
+    ui.review = await bridge.call('reviewList');
+    ui.state = await bridge.call('getState');
+  } catch (e) {
+    ui.rescue = null;
+  }
+  render();
+  loadCandInfo();
 }
 
 async function openDirector(id) {
@@ -149,14 +191,14 @@ function modal() {
     const marks = [['Смотрел', 'watched', false], ['Не смотрел', 'candidate', false], ['Хочу', 'candidate', true], ['Не интересно', 'nointerest', false]];
     body = `<div class="sub">Только полнометражные режиссёрские работы, с начала карьеры. Разметить нужно один раз.</div><div class="list">${fs.map((f) => {
       const cur = f.status === 'queue' || f.status === 'reserve' ? 'queue' : f.status;
-      return `<div class="film"><div><div class="ftitle">${f.year || '—'} · ${esc(titleOf(f))}</div><div class="fmeta">${filmMeta(f)}</div></div><div class="row" style="gap:4px">${cur === 'queue' ? '<span class="tag gold">В очереди</span>' : ''}${marks.map((k) => `<button class="mini ${cur === k[1] && !!f.wish === k[2] ? 'on' : ''}" data-a="${on(() => doState('markFilm', f.key, k[1], k[2]))}">${k[0]}</button>`).join('')}</div></div>`;
+      return `<div class="film"><div class="fwrap">${posterHtml(f.poster)}<div><div class="ftitle">${f.year || '—'} · ${esc(titleOf(f))}</div><div class="fmeta">${filmMeta(f)}</div></div></div><div class="row" style="gap:4px">${cur === 'queue' ? '<span class="tag gold">В очереди</span>' : ''}${marks.map((k) => `<button class="mini ${cur === k[1] && !!f.wish === k[2] ? 'on' : ''}" data-a="${on(() => doState('markFilm', f.key, k[1], k[2]))}">${k[0]}</button>`).join('')}</div></div>`;
     }).join('')}</div><button class="btn primary" data-a="${on(async () => { await doState('finishMarkup', m.dir); if (ui.state.directors[m.dir].needsChoice) openNext(m.dir); else { ui.modal = null; render(); } })}">Готово</button>`;
   }
   if (m.type === 'next') {
     const d = ui.state.directors[m.dir];
     title = `Следующий фильм: ${d.name}`;
     const fs = Object.values(ui.state.films).filter((f) => f.dir === m.dir && f.status === 'candidate').sort((a, b) => Number(b.wish) - Number(a.wish) || (m.sort === 'pop' ? (b.voteAverage * Math.log10(1 + b.voteCount)) - (a.voteAverage * Math.log10(1 + a.voteCount)) : (a.year || 9999) - (b.year || 9999)));
-    body = `<div class="sub">В очереди меньше двух фильмов. Выбери один или два.</div><div class="row"><button class="mini ${m.sort === 'pop' ? 'on' : ''}" data-a="${on(() => { m.sort = 'pop'; render(); })}">Сначала известные</button><button class="mini ${m.sort === 'year' ? 'on' : ''}" data-a="${on(() => { m.sort = 'year'; render(); })}">По хронологии</button></div><div class="list">${fs.map((f) => { const sel = m.chosen.includes(f.key); return `<div class="film"><div><div class="ftitle">${filmLine(f)}</div><div class="fmeta">${filmMeta(f)}${f.wish ? ' · хочешь посмотреть' : ''}</div></div><button class="btn ${sel ? 'primary' : ''}" data-a="${on(() => { m.chosen = sel ? m.chosen.filter((x) => x !== f.key) : m.chosen.concat(f.key); render(); })}">${sel ? 'Выбран' : 'Выбрать'}</button></div>`; }).join('') || '<div class="sub">Больше фильмов не осталось.</div>'}</div><div class="row between"><div class="row"><button class="btn ghost" data-a="${on(() => { ui.modal = null; render(); })}">Отложить</button><button class="btn ghost" data-a="${on(async () => { await doState('ban', m.dir); ui.modal = null; render(); })}">Больше не предлагать этого режиссёра</button></div><button class="btn primary" data-a="${on(async () => { await doState('chooseNext', m.dir, m.chosen); ui.modal = null; render(); })}">Готово: выбрано ${m.chosen.length}</button></div>`;
+    body = `<div class="sub">В очереди меньше двух фильмов. Выбери один или два.</div><div class="row"><button class="mini ${m.sort === 'pop' ? 'on' : ''}" data-a="${on(() => { m.sort = 'pop'; render(); })}">Сначала известные</button><button class="mini ${m.sort === 'year' ? 'on' : ''}" data-a="${on(() => { m.sort = 'year'; render(); })}">По хронологии</button></div><div class="list">${fs.map((f) => { const sel = m.chosen.includes(f.key); return `<div class="film"><div class="fwrap">${posterHtml(f.poster)}<div><div class="ftitle">${filmLine(f)}</div><div class="fmeta">${filmMeta(f)}${f.wish ? ' · хочешь посмотреть' : ''}</div></div></div><button class="btn ${sel ? 'primary' : ''}" data-a="${on(() => { m.chosen = sel ? m.chosen.filter((x) => x !== f.key) : m.chosen.concat(f.key); render(); })}">${sel ? 'Выбран' : 'Выбрать'}</button></div>`; }).join('') || '<div class="sub">Больше фильмов не осталось.</div>'}</div><div class="row between"><div class="row"><button class="btn ghost" data-a="${on(() => { ui.modal = null; render(); })}">Отложить</button><button class="btn ghost" data-a="${on(async () => { await doState('ban', m.dir); ui.modal = null; render(); })}">Больше не предлагать этого режиссёра</button></div><button class="btn primary" data-a="${on(async () => { await doState('chooseNext', m.dir, m.chosen); ui.modal = null; render(); })}">Готово: выбрано ${m.chosen.length}</button></div>`;
   }
   if (m.type === 'add') {
     title = 'Добавить фильм или режиссёра';
@@ -219,6 +261,16 @@ function renderInner() {
   if (focus) { const el = document.getElementById(focus); if (el) { el.focus(); try { el.setSelectionRange(caret, caret); } catch (e) { /* поле без курсора */ } } }
 }
 
+// Постер не загрузился: показываем заглушку, а не значок сломанной картинки.
+document.addEventListener('error', (e) => {
+  if (e.target.tagName === 'IMG' && e.target.classList.contains('poster')) {
+    const d = document.createElement('div');
+    d.className = `noposter ${e.target.classList.contains('big') ? 'big' : ''}`;
+    d.textContent = 'нет постера';
+    e.target.replaceWith(d);
+  }
+}, true);
+
 document.addEventListener('click', (e) => {
   const m = e.target.closest('[data-menu]');
   if (m) { openMenu(m.dataset.menu, e); return; }
@@ -258,4 +310,5 @@ bridge.onUpdate((u) => { ui.update = u; render(); });
   ui.review = ui.state.job ? await bridge.call('reviewList') : [];
   ui.progress = ui.state.job ? await bridge.call('progress') : null;
   render();
+  maybeRescue();
 }()).catch(fatal);

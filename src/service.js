@@ -8,6 +8,14 @@ const SHORT_MINUTES = 40;
 const QUEUE_MIN = 2;
 const QUEUE_MAX = 3;
 
+function countryName(c) {
+  try {
+    return new Intl.DisplayNames(['ru'], { type: 'region' }).of(c.iso_3166_1) || c.name;
+  } catch (e) {
+    return c.name;
+  }
+}
+
 function emptyState() {
   return {
     version: 1,
@@ -23,6 +31,18 @@ function emptyState() {
 
 function filmKey(id) {
   return `m${id}`;
+}
+
+function findInFilmography(list, title, year) {
+  const yearOfCredit = (c) => parseInt(String(c.release_date || '').slice(0, 4), 10);
+  const want = norm(title);
+  const named = (c) => [c.title, c.original_title].map(norm).some((n) => n && (n === want || n.includes(want) || want.includes(n)));
+  const sameYear = list.filter((c) => yearOfCredit(c) === year);
+  const byName = sameYear.filter(named);
+  if (byName.length === 1) return byName[0];
+  if (sameYear.length === 1) return sameYear[0];
+  const close = list.filter((c) => Math.abs(yearOfCredit(c) - year) === 1 && named(c));
+  return close.length === 1 ? close[0] : null;
 }
 
 class Service {
@@ -115,7 +135,7 @@ class Service {
       originalTitle: d.original_title,
       year: yearOf(d),
       runtime: d.runtime || null,
-      countries: (d.production_countries || []).map((c) => c.name),
+      countries: (d.production_countries || []).map((c) => countryName(c)),
       genres: (d.genres || []).map((g) => g.name),
       genreIds: (d.genres || []).map((g) => g.id),
       overview: d.overview || '',
@@ -319,6 +339,69 @@ class Service {
     this.finishReviewIfDone();
     this.save();
     return this.reviewList();
+  }
+
+  // Сведения для карточки выбора: постер, режиссёр, длительность, описание.
+  async candidateInfo(ids) {
+    const out = {};
+    for (const id of ids) {
+      try {
+        const d = await this.detail(id);
+        out[id] = { poster: d.poster, directors: d.directors.map((x) => x.name), runtime: d.runtime, countries: d.countries, overview: d.overview };
+      } catch (e) {
+        if (e.kind === 'auth' || e.kind === 'network') throw e;
+      }
+    }
+    return out;
+  }
+
+  // Если один фильм строки найден, второй ищем в фильмографии его режиссёра:
+  // так находятся фильмы, у которых в TMDB другое или непереведённое название.
+  async rescueReview() {
+    const j = this.state.job;
+    if (!j || !this.tmdb) return { resolved: 0, left: 0 };
+    let resolved = 0;
+    const credits = new Map();
+    const filmsOf = async (dir) => {
+      if (!credits.has(dir)) {
+        const c = await this.tmdb.credits(dir);
+        credits.set(dir, (c.crew || []).filter((x) => x.job === 'Director' && !x.video));
+      }
+      return credits.get(dir);
+    };
+    for (const g of j.groups) {
+      if (g.itemIds.length < 2) continue;
+      const items = g.itemIds.map((i) => j.items[i]);
+      if (!items.some((i) => i.status === 'review')) continue;
+      for (const anchor of items) {
+        const top = anchor.tmdbId ? { id: anchor.tmdbId } : (anchor.cands[0] && anchor.cands[0].score >= 85 ? anchor.cands[0] : null);
+        if (!top) continue;
+        const det = await this.detail(top.id);
+        let done = false;
+        for (const dir of det.directors) {
+          const list = await filmsOf(dir.id);
+          for (const other of items) {
+            if (other === anchor || other.status !== 'review' || !other.year) continue;
+            const m = findInFilmography(list, other.title, other.year);
+            if (!m) continue;
+            await this.detail(m.id);
+            Object.assign(other, { tmdbId: m.id, status: 'auto', groupDir: dir.id, dirIds: [dir.id], applied: false });
+            if (anchor.status === 'review') Object.assign(anchor, { tmdbId: top.id, status: 'auto', groupDir: dir.id, dirIds: [dir.id], applied: false });
+            resolved += 1;
+            done = true;
+          }
+          if (done) break;
+        }
+        if (done && !items.some((i) => i.status === 'review')) break;
+      }
+      if (this.stopRequested) break;
+    }
+    this.state.rescueDone = true;
+    await this.fillMissingDetails();
+    this.applyResolved();
+    this.finishReviewIfDone();
+    this.save();
+    return { resolved, left: this.reviewList().length };
   }
 
   async searchForReview(query) {
@@ -571,4 +654,4 @@ class Service {
   }
 }
 
-module.exports = { Service, emptyState, filmKey, QUEUE_MIN, QUEUE_MAX, SHORT_MINUTES };
+module.exports = { Service, findInFilmography, emptyState, filmKey, QUEUE_MIN, QUEUE_MAX, SHORT_MINUTES };
