@@ -1,0 +1,5 @@
+node_modules/
+dist/
+*.xlsx
+*seed*.json
+.DS_Store

@@ -1,0 +1,55 @@
+{
+  "name": "movie-night",
+  "productName": "Movie Night",
+  "version": "0.1.0",
+  "description": "Личный каталог фильмов: очереди по режиссёрам, диски и планирование киноночи",
+  "main": "electron/main.js",
+  "author": "Chartedkey",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/service.test.js",
+    "dist": "electron-builder --win",
+    "release": "electron-builder --win --publish always"
+  },
+  "dependencies": {
+    "electron-updater": "6.3.9"
+  },
+  "devDependencies": {
+    "electron": "33.2.1",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "io.github.chartedkey.movienight",
+    "productName": "Movie Night",
+    "files": [
+      "electron/**",
+      "src/**",
+      "renderer/**"
+    ],
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "shortcutName": "Movie Night"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Chartedkey",
+        "repo": "MovieNight",
+        "releaseType": "release"
+      }
+    ]
+  }
+}
