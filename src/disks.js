@@ -41,7 +41,7 @@ function matchEntry(state, idx, e) {
     const close = hits.filter((f) => f.year && Math.abs(f.year - e.year) === 1);
     hits = exact.length ? exact : close;
   }
-  if (hits.length === 1) return { key: hits[0].key, how: 'name' };
+  if (hits.length === 1) return { key: hits[0].key, how: e.year ? (hits[0].year === e.year ? 'name-year' : 'name-near-year') : 'name' };
   if (hits.length > 1 && e.duration) {
     const near = hits.filter((f) => f.runtime && Math.abs(f.runtime - e.duration) <= 6);
     if (near.length === 1) return { key: near[0].key, how: 'duration' };
@@ -130,7 +130,7 @@ const diskMethods = {
       const id = idOf(e.path);
       const old = this.entries()[id];
       const same = old && old.size === e.size && old.mtime === e.mtime;
-      this.entries()[id] = same ? { ...old, ...e, duration: old.duration, subs: old.subs, probed: old.probed, filmKey: old.filmKey, state: old.state, candidates: old.candidates } : { ...e, id, role: folder.role, probed: false, state: null };
+      this.entries()[id] = same ? { ...old, ...e, duration: old.duration, subs: old.subs, probed: old.probed, filmKey: old.filmKey, state: old.state, candidates: old.candidates, matchMethod: old.matchMethod, forceReview: old.forceReview } : { ...e, id, role: folder.role, probed: false, state: null };
       this.entries()[id].id = id;
       this.entries()[id].role = folder.role;
     });
@@ -188,11 +188,12 @@ const diskMethods = {
     Object.values(this.entries()).forEach((e) => {
       if (e.kind === 'series') { if (!['film'].includes(e.state)) e.state = e.state === 'ignored' ? 'ignored' : 'series'; if (e.state !== 'film') return; }
       if (e.state === 'ignored') return;
+      if (e.forceReview) { e.state = 'orphan'; return; }
       if (e.filmKey && this.state.films[e.filmKey]) { e.state = 'linked'; return; }
       const ghost = this.graveyard && this.graveyard.get(fileKey(e));
-      if (ghost && this.state.films[ghost.filmKey]) { e.filmKey = ghost.filmKey; e.state = 'linked'; return; }
+      if (ghost && this.state.films[ghost.filmKey]) { e.filmKey = ghost.filmKey; e.matchMethod = 'moved'; e.state = 'linked'; return; }
       const m = matchEntry(this.state, idx, e);
-      if (m.key) { e.filmKey = m.key; e.state = 'linked'; delete e.candidates; } else { e.state = 'orphan'; e.candidates = m.candidates || null; }
+      if (m.key) { e.filmKey = m.key; e.matchMethod = m.how; e.state = 'linked'; delete e.candidates; } else { e.state = 'orphan'; e.candidates = m.candidates || null; }
     });
   },
 
@@ -211,7 +212,10 @@ const diskMethods = {
   linkEntryToFilm(id, filmKey, remember = true) {
     const e = this.entries()[id];
     if (!e) throw new Error('Файл не найден.');
+    if (!this.state.films[filmKey]) throw new Error('Фильм не найден.');
     e.filmKey = filmKey;
+    e.matchMethod = 'manual';
+    delete e.forceReview;
     e.state = 'linked';
     delete e.candidates;
     if (remember) { this.state.nameLinks = this.state.nameLinks || {}; this.state.nameLinks[nameKey(e.title, e.year)] = filmKey; }
@@ -246,8 +250,22 @@ const diskMethods = {
     this.save();
     return this.state;
   },
+  unlinkEntry(id) {
+    const e = this.entries()[id];
+    if (!e) throw new Error('Файл не найден.');
+    const key = nameKey(e.title, e.year);
+    if (this.state.nameLinks && this.state.nameLinks[key] === e.filmKey) delete this.state.nameLinks[key];
+    delete e.filmKey;
+    delete e.matchMethod;
+    delete e.candidates;
+    e.forceReview = true;
+    e.state = 'orphan';
+    this.refreshTasks();
+    this.save();
+    return this.state;
+  },
   ignoreEntry(id) { this.entries()[id].state = 'ignored'; this.save(); return this.state; },
-  unignoreEntry(id) { const e = this.entries()[id]; e.state = null; this.linkAll(); this.save(); return this.state; },
+  unignoreEntry(id) { const e = this.entries()[id]; e.state = null; this.linkAll(); this.refreshTasks(); this.save(); return this.state; },
   entryIsFilm(id) { const e = this.entries()[id]; e.state = 'film'; e.kind = e.kind === 'series' ? 'folder' : e.kind; this.linkAll(); this.save(); return this.state; },
   excludeSeriesFolder(p) { this.addFolder(p, 'exclude'); Object.keys(this.entries()).forEach((k) => { if (inFolder(k, idOf(p))) delete this.entries()[k]; }); this.save(); return this.state; },
   keepOnDisk(key) { const f = this.mustFilm(key); f.keepOnDisk = true; f.moveTask = false; this.save(); return this.state; },
@@ -278,12 +296,17 @@ const diskMethods = {
       const isFile = e.kind === 'file';
       const ext = isFile ? path.extname(e.path) : '';
       const to = `${base} (${f.year})${ext}`;
-      if (to !== path.basename(e.path)) plan.push({ id: e.id, from: path.basename(e.path), to, dir: path.dirname(e.path) });
+      if (to !== path.basename(e.path)) plan.push({
+        id: e.id, from: path.basename(e.path), to, dir: path.dirname(e.path), filmKey: f.key,
+        matchMethod: e.matchMethod || 'unknown', fileYear: e.year || null, filmYear: f.year,
+        duration: e.duration || null,
+        requiresConfirmation: !e.year || e.year !== f.year || !e.matchMethod || ['name', 'duration', 'moved'].includes(e.matchMethod),
+      });
     });
     return plan;
   },
   // Меняется только внешняя папка или сам файл. Содержимое дисков не трогаем.
-  async applyRename(ids) {
+  async applyRename(ids, confirmedIds = []) {
     const plan = this.renamePlan().filter((p) => ids.includes(p.id));
     const log = this.state.renameLog || (this.state.renameLog = []);
     const failed = [];
@@ -291,6 +314,7 @@ const diskMethods = {
       const from = path.join(p.dir, p.from);
       const to = path.join(p.dir, p.to);
       try {
+        if (p.requiresConfirmation && !confirmedIds.includes(p.id)) throw new Error('Сначала подтверди фильм и год для этой строки.');
         if (fs.existsSync(to)) throw new Error('имя занято');
         await fs.promises.rename(from, to);
         log.push({ from, to, at: new Date().toISOString() });

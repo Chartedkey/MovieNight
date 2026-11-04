@@ -41,7 +41,7 @@ async function call(method, ...args) {
     throw e;
   }
 }
-function say(text) { ui.toast = text; render(); clearTimeout(say.t); say.t = setTimeout(() => { ui.toast = null; render(); }, 3500); }
+function say(text, action = null) { ui.toastAction = action; ui.toast = text; render(); clearTimeout(say.t); say.t = setTimeout(() => { ui.toast = null; render(); }, 3500); }
 async function refresh() { ui.state = await call('getState'); render(); }
 async function doState(method, ...args) { const r = await call(method, ...args); ui.state = r.state || r; ui.menu = null; render(); return r; }
 
@@ -171,6 +171,7 @@ async function runScan(only) {
 async function loadDiskExtras() {
   ui.dups = await bridge.call('duplicates');
   ui.plan = await bridge.call('renamePlan');
+  ui.planOn = new Set();
   if (ui.screen === 'disks') render();
   if (ui.screen === 'disks' && ui.diskTab === 'orphans') loadOrphans();
 }
@@ -235,14 +236,40 @@ function orphanCard(e) {
   const mine = (e.candidates || []).map((k) => ui.state.films[k]).filter(Boolean);
   const found = ui.orphanSearch[e.id] || [];
   const candRow = (c) => { const i = ui.candInfo[c.id]; return `<div class="film choice"><div class="fwrap">${posterHtml(i && i.poster)}<div style="min-width:0"><div class="ftitle">${esc(c.title)}${c.year ? ` (${c.year})` : ''}</div><div class="fmeta">${esc(c.originalTitle || '')}</div><div class="fmeta">${esc(i ? [i.directors.join(', '), i.runtime ? `${i.runtime} мин` : null].filter(Boolean).join(' · ') : '')}</div>${queueContext(c.id)}</div></div><div class="col2"><button class="mini on" data-a="${on(() => requestQueueAdd(c.id, e.id))}">Добавить в очередь</button><button class="mini" title="Запомнить фильм и его файлы без добавления в очередь просмотра" data-a="${on(() => doState('addEntryFilm', e.id, c.id, 'disk'))}">Только учитывать на диске</button><button class="mini" data-a="${on(() => doState('addEntryFilm', e.id, c.id, true))}">Уже смотрел</button></div></div>`; };
-  return `<section class="card"><div><h2>${esc(e.title)}${e.year ? ` (${e.year})` : ''}</h2><div class="path">${esc(e.path)}</div><div class="sub">${kindName[e.kind] || ''} · ${gb(e.size)}${e.duration ? ` · ${e.duration} мин` : ''}</div></div>${mine.length ? `<div class="sub warn">Совпало с несколькими фильмами списка:</div>${mine.map((f) => `<div class="film"><div class="fwrap">${posterHtml(f.poster)}<div class="ftitle">${filmLine(f)}<div class="fmeta">${esc((ui.state.directors[f.dir] || {}).name || '')}${f.runtime ? ` · ${f.runtime} мин` : ''}</div></div></div><button class="mini on" data-a="${on(() => doState('chooseEntryFilm', e.id, f.key))}">Это он</button></div>`).join('')}` : ''}<div class="list">${found.map(candRow).join('') || (mine.length ? '' : '<div class="sub">Ищу варианты…</div>')}</div><div class="row"><input class="field" id="orp${esc(e.id)}" data-orpq="${esc(e.id)}" aria-label="Поиск в TMDB" placeholder="Название, режиссёр или ссылка TMDB" value="${esc(ui.orphanQ[e.id] || '')}"><button class="btn" data-a="${on(async () => { const r = await call('searchForReview', ui.orphanQ[e.id] || e.title); ui.orphanSearch[e.id] = r.cands; Object.assign(ui.candInfo, await call('candidateInfo', r.cands.map((c) => c.id))); render(); })}">Найти</button><button class="btn ghost" data-a="${on(() => call('openEntry', e.id))}">Открыть папку</button><button class="btn ghost" data-a="${on(() => doState('ignoreEntry', e.id))}">Игнорировать</button></div></section>`;
+  return `<section class="card"><div><h2>${esc(e.title)}${e.year ? ` (${e.year})` : ''}</h2><div class="path">${esc(e.path)}</div><div class="sub">${kindName[e.kind] || ''} · ${gb(e.size)}${e.duration ? ` · ${e.duration} мин` : ''}</div></div>${mine.length ? `<div class="sub warn">Совпало с несколькими фильмами списка:</div>${mine.map((f) => `<div class="film"><div class="fwrap">${posterHtml(f.poster)}<div class="ftitle">${filmLine(f)}<div class="fmeta">${esc((ui.state.directors[f.dir] || {}).name || '')}${f.runtime ? ` · ${f.runtime} мин` : ''}</div></div></div><button class="mini on" data-a="${on(() => doState('chooseEntryFilm', e.id, f.key))}">Это он</button></div>`).join('')}` : ''}<div class="list">${found.map(candRow).join('') || (mine.length ? '' : '<div class="sub">Ищу варианты…</div>')}</div><div class="row"><input class="field" id="orp${esc(e.id)}" data-orpq="${esc(e.id)}" aria-label="Поиск в TMDB" placeholder="Название, режиссёр или ссылка TMDB" value="${esc(ui.orphanQ[e.id] || '')}"><button class="btn" data-a="${on(async () => { const r = await call('searchForReview', ui.orphanQ[e.id] || e.title); ui.orphanSearch[e.id] = r.cands; Object.assign(ui.candInfo, await call('candidateInfo', r.cands.map((c) => c.id))); render(); })}">Найти</button><button class="btn ghost" data-a="${on(() => call('openEntry', e.id))}">Открыть папку</button><button class="btn ghost" data-a="${on(() => ignoreFile(e.id))}">Игнорировать</button></div></section>`;
 }
+async function restoreIgnored(id) {
+  await doState('unignoreEntry', id);
+  await loadDiskExtras();
+  render();
+}
+async function ignoreFile(id) {
+  await doState('ignoreEntry', id);
+  say('Фильм скрыт. Он доступен во вкладке «Игнорируемые».', { label: 'Отменить', run: () => restoreIgnored(id) });
+}
+function renameSelected(p) {
+  return p.requiresConfirmation ? !!(ui.planOn && ui.planOn.has(p.id)) : !(ui.planOff && ui.planOff.has(p.id));
+}
+function renameCard(p) {
+  const f = ui.state.films[p.filmKey] || {};
+  const reasons = { manual: 'Ты подтвердил фильм вручную', memory: 'Сохранённая связь по названию и году', name: 'Только по совпадению названия в библиотеке', 'name-year': 'По совпадению названия и года', 'name-near-year': 'По названию и году с расхождением в один год', duration: 'По названию и близкой длительности', moved: 'По прежней связи при перемещении', unknown: 'Связь из прежней версии: способ сопоставления не сохранён' };
+  const selected = renameSelected(p);
+  return `<section class="card"><div class="fmeta">${esc(p.from)} → <strong>${esc(p.to)}</strong></div><div class="path">${esc(p.dir)}</div><div class="fwrap" style="margin-top:10px">${posterHtml(f.poster)}<div><div class="ftitle">${filmLine(f)}</div><div class="sub">${esc((ui.state.directors[f.dir] || {}).name || 'Режиссёр не указан')}</div><div class="sub">Длительность файла: ${p.duration ? `${p.duration} мин` : 'неизвестна'} · TMDB: ${f.runtime ? `${f.runtime} мин` : 'неизвестна'}</div><div class="sub">${esc(reasons[p.matchMethod] || reasons.unknown)}</div>${p.requiresConfirmation ? '<div class="sub warn">Проверь фильм и год. Без подтверждения строка не переименовывается.</div>' : ''}</div></div><div class="row"><button class="mini ${selected ? 'on' : ''}" data-a="${on(() => {
+    if (p.requiresConfirmation) { ui.planOn = ui.planOn || new Set(); if (selected) ui.planOn.delete(p.id); else ui.planOn.add(p.id); }
+    else { ui.planOff = ui.planOff || new Set(); if (selected) ui.planOff.add(p.id); else ui.planOff.delete(p.id); }
+    render();
+  })}">${selected ? 'Выбрано — не менять' : p.requiresConfirmation ? 'Фильм и год верны — выбрать' : 'Выбрать'}</button><button class="mini" data-a="${on(() => call('openEntry', p.id))}">Открыть папку</button><button class="mini" data-a="${on(async () => {
+    await doState('unlinkEntry', p.id); ui.diskTab = 'orphans';
+    delete ui.orphanSearch[p.id]; await loadDiskExtras(); render();
+  })}">Это другой фильм</button></div></section>`;
+}
+
 function disks() {
   const s = ui.state;
   const es = allEntries();
   const orphans = es.filter((e) => e.state === 'orphan');
   const series = es.filter((e) => e.state === 'series');
-  const tabs = [['folders', 'Папки', 0], ['orphans', 'Нужно разобрать', orphans.length], ['stored', 'Учтены на диске', Object.values(s.films).filter((f) => f.status === 'disk').length], ['dups', 'Дубли', ui.dups.length], ['series', 'Похоже на сериал', series.length], ['rename', 'Названия', ui.plan.length]];
+  const tabs = [['folders', 'Папки', 0], ['orphans', 'Нужно разобрать', orphans.length], ['stored', 'Учтены на диске', Object.values(s.films).filter((f) => f.status === 'disk').length], ['dups', 'Дубли', ui.dups.length], ['series', 'Похоже на сериал', series.length], ['ignored', 'Игнорируемые', es.filter((e) => e.state === 'ignored').length], ['rename', 'Названия', ui.plan.length]];
   const tabHtml = `<div class="row">${tabs.map((t) => `<button class="chip ${ui.diskTab === t[0] ? 'on' : ''}" data-a="${on(() => { ui.diskTab = t[0]; render(); if (t[0] === 'orphans') loadOrphans(); })}">${t[1]}${t[2] ? ` · ${t[2]}` : ''}</button>`).join('')}</div>`;
   const lost = Object.values(s.lost || {}).map((l) => `<div class="error"><h3>Потеряно фильмов: ${l.count}. Обнови путь</h3><div class="sub" style="color:#f4d9c8">Папка ${esc(l.path)}: ${esc(l.reason)}. Пока ты не ответишь, задачи не закрываются, а эти фильмы не считаются пропавшими.</div><div class="row" style="margin-top:8px"><button class="btn primary" data-a="${on(async () => { const p = await call('pickFolder'); if (p) { ui.scan = { running: true, current: 'Сканирую новый путь', found: 0 }; render(); await call('updateFolderPath', l.path, p); await refresh(); ui.scan = null; await loadDiskExtras(); render(); } })}">Обновить путь</button><button class="btn" data-a="${on(() => runScan(l.path))}">Проверить снова</button><button class="btn ghost" data-a="${on(async () => { await call('confirmLost', l.path); await refresh(); await loadDiskExtras(); })}">Да, я их убрал</button></div></div>`).join('');
   const roleNames = { normal: 'Обычная', today: '«Сегодня»', exclude: 'Исключить' };
@@ -264,8 +291,17 @@ function disks() {
   if (ui.diskTab === 'series') {
     body = `<div class="list">${series.map((e) => `<div class="film"><div><div class="ftitle">${esc(e.name)}</div><div class="path">${esc(e.path)}</div><div class="fmeta">${gb(e.size)}</div></div><div class="row"><button class="mini" data-a="${on(() => doState('entryIsFilm', e.id))}">Это фильм</button>${e.kind === 'series' ? `<button class="mini" data-a="${on(() => doState('excludeSeriesFolder', e.path))}">Исключить папку</button>` : ''}</div></div>`).join('') || '<div class="card sub">Сериалов не найдено.</div>'}</div>`;
   }
+  if (ui.diskTab === 'ignored') {
+    const ignored = es.filter((e) => e.state === 'ignored');
+    body = `<div class="sub">Эти файлы скрыты из разбора. Их можно вернуть без повторного добавления папки.</div><div class="list">${ignored.map((e) => `<div class="film"><div><div class="ftitle">${esc(e.title || e.name)}</div><div class="path">${esc(e.path)}</div></div><button class="mini" data-a="${on(() => restoreIgnored(e.id))}">Вернуть в разбор</button></div>`).join('') || '<div class="card sub">Игнорируемых файлов нет.</div>'}</div>`;
+  }
   if (ui.diskTab === 'rename') {
-    body = `<section class="card"><div class="row between"><div><h2>Единый стиль названий</h2><div class="sub">Меняется только имя внешней папки или файла. Содержимое VIDEO_TS и BDMV не трогается. Перед применением сделай пробу на нескольких папках.</div></div><button class="btn primary" ${ui.plan.length ? '' : 'disabled'} data-a="${on(async () => { const r = await call('applyRename', ui.plan.filter((p) => !ui.planOff || !ui.planOff.has(p.id)).map((p) => p.id)); ui.state = r.state; ui.planFailed = r.failed; await loadDiskExtras(); render(); })}">Переименовать отмеченные</button></div>${ui.planFailed.map((x) => `<div class="error">${esc(x.from)}: ${esc(x.why)}</div>`).join('')}${ui.plan.slice(0, 300).map((p) => { const off = ui.planOff && ui.planOff.has(p.id); return `<div class="film"><div class="fmeta" style="margin:0">${esc(p.from)} → <strong style="color:var(--text)">${esc(p.to)}</strong></div><button class="mini ${off ? '' : 'on'}" data-a="${on(() => { ui.planOff = ui.planOff || new Set(); if (off) ui.planOff.delete(p.id); else ui.planOff.add(p.id); render(); })}">${off ? 'Не менять' : 'Менять'}</button></div>`; }).join('') || '<div class="sub">Всё уже в едином стиле.</div>'}</section>${(s.renameLog || []).length ? `<section class="card"><h2>Журнал переименований</h2>${s.renameLog.map((l, i) => ({ l, i })).reverse().slice(0, 50).map(({ l, i }) => `<div class="film"><div class="path">${esc(l.from)} → ${esc(l.to)}</div><button class="mini" data-a="${on(async () => { await call('undoRename', i); await refresh(); await loadDiskExtras(); })}">Отменить</button></div>`).join('')}</section>` : ''}`;
+    const selected = ui.plan.slice(0, 300).filter(renameSelected);
+    body = `<section class="card"><h2>Единый стиль названий</h2><div class="sub">Проверь, какой фильм связан с файлом. Год берётся из этой записи TMDB. Сомнительные строки требуют отдельного подтверждения. Меняется только имя внешней папки или файла.</div><button class="btn primary" ${selected.length ? '' : 'disabled'} data-a="${on(async () => {
+      const rows = ui.plan.slice(0, 300).filter(renameSelected);
+      const r = await call('applyRename', rows.map((p) => p.id), rows.filter((p) => p.requiresConfirmation).map((p) => p.id));
+      ui.state = r.state; ui.planFailed = r.failed; await loadDiskExtras(); render();
+    })}">Переименовать выбранные (${selected.length})</button></section>${ui.planFailed.map((x) => `<div class="error">${esc(x.from)}: ${esc(x.why)}</div>`).join('')}<div class="list">${ui.plan.slice(0, 300).map(renameCard).join('') || '<div class="card sub">Предложений по переименованию нет.</div>'}</div>${ui.plan.length > 300 ? '<div class="sub">Показаны первые 300 строк. Остальные доступны после их разбора.</div>' : ''}${(s.renameLog || []).length ? `<section class="card"><h2>Журнал переименований</h2>${s.renameLog.map((l, i) => ({ l, i })).reverse().slice(0, 50).map(({ l, i }) => `<div class="film"><div class="path">${esc(l.from)} → ${esc(l.to)}</div><button class="mini" data-a="${on(async () => { await call('undoRename', i); await refresh(); await loadDiskExtras(); })}">Отменить</button></div>`).join('')}</section>` : ''}`;
   }
   const scanNote = ui.scan ? `<div class="notice">${esc(ui.scan.current || '')}${ui.scan.found ? ` · найдено: ${ui.scan.found}` : ''}</div>` : '';
   return `<div class="head"><div><h1>Диски</h1><div class="sub">Программа только читает папки. Удалять и перемещать фильмы ты будешь сам.</div></div></div>${lost}${scanNote}${tabHtml}${body}`;
@@ -435,7 +471,7 @@ function renderInner() {
     html = navHtml() + `<main class="main">${(screens[ui.screen] || library)()}</main>`;
   }
   const mdl = ui.modal && ui.modal.type === 'rename' ? renameModal() : modal();
-  $app.innerHTML = `<div class="app">${html}${mdl}${menu()}${ui.toast ? `<div class="toast" role="status">${esc(ui.toast)}</div>` : ''}</div>`;
+  $app.innerHTML = `<div class="app">${html}${mdl}${menu()}${ui.toast ? `<div class="toast" role="status">${esc(ui.toast)}${ui.toastAction ? `<button class="mini" data-a="${on(ui.toastAction.run)}">${esc(ui.toastAction.label)}</button>` : ''}</div>` : ''}</div>`;
   const shadeAfter = document.querySelector('.shade');
   if (shadeAfter && shadeBefore) shadeAfter.scrollTop = shadeTop;
   window.scrollTo(0, pageTop);

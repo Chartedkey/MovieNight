@@ -242,7 +242,7 @@ test('переименование: только внешнее имя, с жу�
   const plan = s.renamePlan();
   const dream = plan.find((p) => p.from === 'Мечта');
   assert.equal(dream.to, 'Мечта (1964)');
-  const { failed } = await s.applyRename(plan.map((p) => p.id));
+  const { failed } = await s.applyRename(plan.map((p) => p.id), plan.map((p) => p.id));
   assert.ok(fs.existsSync(path.join(r, 'Мечта (1964)', 'VIDEO_TS', 'VTS_01_1.VOB')), 'содержимое диска не тронуто');
   assert.equal(failed.length, 1);
   assert.equal(failed[0].from, 'Река');
@@ -334,4 +334,51 @@ test('добавление учтённого фильма соблюдает п
   assert.equal(s.queueCount(9),4);
   const info=await s.candidateInfo([900]);
   assert.deepEqual(info[900].directorIds,[9]);
+});
+
+test('игнорирование можно отменить после повторного сканирования и перезапуска', async () => {
+  const r=tmp(); big(path.join(r,'Неизвестный.mkv'));
+  const s=svc(); s.addFolder(r); await s.scanAll();
+  const id=Object.keys(s.state.files)[0];
+  s.ignoreEntry(id); await s.scanAll();
+  assert.equal(s.state.files[id].state,'ignored');
+  const restored=new Service({dir:s.dir,tmdb:s.tmdb});
+  restored.unignoreEntry(id);
+  assert.equal(restored.state.files[id].state,'orphan');
+  assert.ok(fs.existsSync(restored.state.files[id].path));
+});
+
+test('год без подтверждения не меняется; исправление связи сохраняется после сканирования', async () => {
+  const r=tmp(); big(path.join(r,'Комната.mkv'));
+  const s=svc({m1:film(1,'Комната',1993)}); s.addFolder(r); await s.scanAll();
+  const id=Object.keys(s.state.files)[0];
+  let plan=s.renamePlan();
+  assert.equal(plan[0].matchMethod,'name');
+  assert.equal(plan[0].requiresConfirmation,true);
+  const result=await s.applyRename([id]);
+  assert.equal(result.failed.length,1);
+  assert.ok(fs.existsSync(path.join(r,'Комната.mkv')));
+  s.unlinkEntry(id); await s.scanAll();
+  assert.equal(s.state.files[id].state,'orphan');
+  assert.equal(s.renamePlan().length,0);
+  const restored=new Service({dir:s.dir,tmdb:s.tmdb}); await restored.scanAll();
+  assert.equal(restored.state.files[id].state,'orphan');
+  restored.chooseEntryFilm(id,'m1');
+  assert.equal(restored.state.files[id].matchMethod,'manual');
+  plan=restored.renamePlan();
+  assert.equal(plan[0].requiresConfirmation,true,'добавление года подтверждается отдельно даже после выбора фильма');
+  const renamed=await restored.applyRename([id],[id]);
+  assert.equal(renamed.failed.length,0);
+  assert.ok(fs.existsSync(path.join(r,'Комната (1993).mkv')));
+});
+
+test('старые связи неизвестного происхождения и расхождение года требуют подтверждения', async () => {
+  const s=svc({m1:film(1,'Фильм',1993)});
+  s.state.files={x:{id:'x',path:'/tmp/Фильм 1993.mkv',name:'Фильм 1993.mkv',title:'Фильм',year:1993,kind:'file',state:'linked',filmKey:'m1'}};
+  assert.equal(s.renamePlan()[0].matchMethod,'unknown');
+  assert.equal(s.renamePlan()[0].requiresConfirmation,true);
+  s.state.files.x.matchMethod='name-year';
+  assert.equal(s.renamePlan()[0].requiresConfirmation,false);
+  s.state.files.x.year=1992;
+  assert.equal(s.renamePlan()[0].requiresConfirmation,true);
 });
