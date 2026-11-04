@@ -26,6 +26,7 @@ function emptyState() {
     nearUnresolved: [],
     skipped: [],
     settings: {},
+    nightDraft: null, nights: [], nightTemplates: [], activeNight: null,
   };
 }
 
@@ -136,6 +137,7 @@ class Service {
       year: yearOf(d),
       runtime: d.runtime || null,
       countries: (d.production_countries || []).map((c) => countryName(c)),
+      countryCodes: (d.production_countries || []).map((c) => c.iso_3166_1).filter(Boolean),
       genres: (d.genres || []).map((g) => g.name),
       genreIds: (d.genres || []).map((g) => g.id),
       overview: d.overview || '',
@@ -476,7 +478,7 @@ class Service {
     if (!films[key]) {
       films[key] = {
         key, tmdbId: d.id, userTitle: extra.userTitle || null, titleSource: extra.userTitle ? (extra.titleSource || 'table') : null, tmdbTitle: d.title || d.displayTitle || null,
-        originalTitle: d.originalTitle, year: d.year, runtime: d.runtime, countries: d.countries, genres: d.genres,
+        originalTitle: d.originalTitle, year: d.year, runtime: d.runtime, countries: d.countries, countryCodes: d.countryCodes || [], genres: d.genres, genreIds: d.genreIds || [],
         altTitles: d.altTitles || [], overview: d.overview, poster: d.poster, popularity: d.popularity, voteAverage: d.voteAverage, voteCount: d.voteCount,
         directorIds: d.directors.map((x) => x.id), dir: extra.dir ?? (d.directors[0] ? d.directors[0].id : null),
         kpLink: extra.link || null, status: extra.status || 'queue', rating: null, rewatch: false, pending: false, wish: false, watched: [],
@@ -739,6 +741,6 @@ class Service {
   }
 }
 
-Object.assign(Service.prototype, require('./disks').diskMethods);
+Object.assign(Service.prototype, require('./disks').diskMethods, require('./nights').nightMethods);
 
 module.exports = { Service, findInFilmography, emptyState, filmKey, QUEUE_MIN, QUEUE_MAX, SHORT_MINUTES };

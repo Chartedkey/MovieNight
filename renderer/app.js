@@ -93,8 +93,8 @@ function navHtml() {
   const s = ui.state;
   const films = Object.values(s.films);
   const review = ui.review.length;
-  const pending = films.filter((f) => f.pending || f.moveTask).length;
-  const items = [['library', 'Библиотека', 0], ...(review ? [['review', 'Спорные строки', review]] : []), ['near', 'Ближайшие', s.near.length], ['rewatch', 'Пересмотреть', films.filter((f) => f.rewatch).length], ['morning', 'Утренний разбор', pending], ['download', 'Скачать', downloadList().length], ['disks', 'Диски', allEntries().filter((e) => e.state === 'orphan').length + Object.keys(s.lost || {}).length], ['night', 'Собрать ночь', 0, true]];
+  const pending = films.filter((f) => f.pending || f.moveTask).length + (s.nights||[]).reduce((sum,n)=>sum+n.slots.filter(x=>!x.result).length,0);
+  const items = [['library', 'Библиотека', 0], ...(review ? [['review', 'Спорные строки', review]] : []), ['near', 'Ближайшие', s.near.length], ['rewatch', 'Пересмотреть', films.filter((f) => f.rewatch).length], ['morning', 'Утренний разбор', pending], ['download', 'Скачать', downloadList().length], ['disks', 'Диски', allEntries().filter((e) => e.state === 'orphan').length + Object.keys(s.lost || {}).length], ['night', 'Собрать ночь', 0]];
   return `<nav class="side" aria-label="Разделы"><img class="logo" src="logo.png" alt="Movie Night">${items.map((n) => `<button class="nav ${ui.screen === n[0] ? 'on' : ''}" ${n[3] ? 'disabled title="Следующий этап"' : ''} data-a="${on(async () => { ui.screen = n[0]; if (n[0] === 'review') ui.review = await call('reviewList'); render(); if (n[0] === 'review') loadCandInfo(); if (n[0] === 'disks') loadDiskExtras(); })}"><span>${n[1]}</span>${n[2] ? `<span class="badge">${n[2]}</span>` : n[3] ? '<span class="sub" style="font-size:11px">скоро</span>' : ''}</button>`).join('')}<div class="ver">Версия ${esc(ui.version)}${ui.update ? `<br>${ui.update.state === 'ready' ? `<button class="mini on" data-a="${on(() => call('installUpdate'))}">Установить ${esc(ui.update.version)}</button>` : `Загружается ${esc(ui.update.version)}`}` : ''}</div></nav>`;
 }
 
@@ -135,15 +135,16 @@ function rewatch() {
 }
 
 function morning() {
+  const planned = new Set((ui.state.nights || []).filter(n=>n.slots.some(s=>!s.result)).flatMap(n => n.slots.map(s => s.key)));
   const list = Object.values(ui.state.films).filter((f) => f.pending || f.moveTask);
-  const todayFilms = allEntries().filter((e) => e.role === 'today' && e.state === 'linked' && e.filmKey && ['queue', 'reserve', 'candidate'].includes((ui.state.films[e.filmKey] || {}).status)).map((e) => ui.state.films[e.filmKey]);
+  const todayFilms = allEntries().filter((e) => !planned.has(e.filmKey) && e.role === 'today' && e.state === 'linked' && e.filmKey && ['queue', 'reserve', 'candidate'].includes((ui.state.films[e.filmKey] || {}).status)).map((e) => ui.state.films[e.filmKey]);
   const status = async (f, st) => { const r = await doState('setFilmStatus', f.key, st); if (r.askDirector != null) openDirector(r.askDirector); };
-  const today = todayFilms.length ? `<section class="card"><h2>Лежит в папке «Сегодня»: что посмотрел?</h2>${[...new Set(todayFilms)].map((f) => `<div class="film"><div class="fwrap">${posterHtml(f.poster)}<div class="ftitle">${filmLine(f)}</div></div><div class="row"><button class="mini on" data-a="${on(() => status(f, 'watched'))}">Посмотрел</button><button class="mini" data-a="${on(() => status(f, 'dropped'))}">Бросил</button></div></div>`).join('')}</section>` : '';
+  const today = todayFilms.length ? `<section class="card"><h2>Лежит в папке «Сегодня», вне утверждённых ночей: что посмотрел?</h2>${[...new Set(todayFilms)].map((f) => `<div class="film"><div class="fwrap">${posterHtml(f.poster)}<div class="ftitle">${filmLine(f)}</div></div><div class="row"><button class="mini on" data-a="${on(() => status(f, 'watched'))}">Посмотрел</button><button class="mini" data-a="${on(() => status(f, 'dropped'))}">Бросил</button></div></div>`).join('')}</section>` : '';
   const cards = list.map((f) => {
     const paths = ui.files.get(f.key) || [];
     return `<section class="card"><div class="fwrap">${posterHtml(f.poster, true)}<div><h2>${filmLine(f)}</h2><div class="sub">${f.status === 'dropped' ? 'Брошен' : 'Посмотрен'} · ${esc((ui.state.directors[f.dir] || {}).name || '')}</div></div></div>${f.pending ? `<div class="row" style="gap:4px" aria-label="Оценка">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => `<button class="mini ${f.rating === n ? 'on' : ''}" data-a="${on(() => doState('rate', f.key, n))}">${n}</button>`).join('')}</div><div class="row"><button class="mini ${f.rewatch ? 'on' : ''}" data-a="${on(() => doState('toggleRewatch', f.key))}">В «Пересмотреть»</button><button class="btn ${f.moveTask ? '' : 'primary'}" data-a="${on(() => doState('finishReview', f.key))}">Оценка готова</button></div>` : ''}${f.moveTask ? `<div class="label">Перенеси на резервный диск и удали отсюда${paths.length > 1 ? `. Копий: ${paths.length}` : ''}</div>${paths.map((e) => `<div class="film"><div class="path">${esc(e.path)}<br>${gb(e.size)}</div><button class="mini" data-a="${on(() => call('openEntry', e.id))}">Открыть папку</button></div>`).join('')}<div class="row"><button class="mini" data-a="${on(() => doState('keepOnDisk', f.key))}">Оставить на диске</button><button class="mini" data-a="${on(() => runScan())}">Я перенёс, проверить</button></div>` : ''}</section>`;
   }).join('');
-  return `<div class="head"><div><h1>Утренний разбор</h1><div class="sub">Задача на перенос закроется сама, когда файла не останется ни в одной папке.</div></div></div>${today}<div class="grid wide">${cards || (today ? '' : '<div class="card sub">Задач нет.</div>')}</div>`;
+  return `<div class="head"><div><h1>Утренний разбор</h1><div class="sub">Задача на перенос закроется сама, когда файла не останется ни в одной папке.</div></div></div>${typeof nightMorning === 'function' ? nightMorning() : ''}${today}<div class="grid wide">${cards || (today ? '' : '<div class="card sub">Задач нет.</div>')}</div>`;
 }
 
 function downloadList() {
@@ -336,7 +337,7 @@ function renameCard(p) {
   })}">${selected ? 'Выбрано — не менять' : p.requiresConfirmation ? 'Фильм и год верны — выбрать' : 'Выбрать'}</button><button class="mini" data-a="${on(() => call('openEntry', p.id))}">Открыть папку</button><button class="mini" data-a="${on(async () => {
     await doState('unlinkEntry', p.id); ui.diskTab = 'orphans';
     delete ui.orphanSearch[p.id]; await loadDiskExtras(); render();
-  })}">Это другой фильм</button></div></section>`;
+  })}" >Это другой фильм</button><button class="mini" data-a="${on(async()=>{await doState('setRenamePreference',p.id,'keep');await loadDiskExtras();render();})}">Оставить как есть</button><button class="mini" data-a="${on(()=>{ui.modal={type:'file-name',id:p.id,name:p.to};render();})}">Ввести имя вручную</button></div></section>`;
 }
 
 function disks() {
@@ -377,6 +378,10 @@ function disks() {
       const r = await call('applyRename', rows.map((p) => p.id), rows.filter((p) => p.requiresConfirmation).map((p) => p.id));
       ui.state = r.state; ui.planFailed = r.failed; await loadDiskExtras(); render();
     })}">Переименовать выбранные (${selected.length})</button></section>${ui.planFailed.map((x) => `<div class="error">${esc(x.from)}: ${esc(x.why)}</div>`).join('')}<div class="list">${ui.plan.slice(0, 300).map(renameCard).join('') || '<div class="card sub">Предложений по переименованию нет.</div>'}</div>${ui.plan.length > 300 ? '<div class="sub">Показаны первые 300 строк. Остальные доступны после их разбора.</div>' : ''}${(s.renameLog || []).length ? `<section class="card"><h2>Журнал переименований</h2>${s.renameLog.map((l, i) => ({ l, i })).reverse().slice(0, 50).map(({ l, i }) => `<div class="film"><div class="path">${esc(l.from)} → ${esc(l.to)}</div><button class="mini" data-a="${on(async () => { await call('undoRename', i); await refresh(); await loadDiskExtras(); })}">Отменить</button></div>`).join('')}</section>` : ''}`;
+  }
+  if (ui.diskTab === 'rename') {
+    const kept = es.filter(e=>e.renamePreference==='keep');
+    if(kept.length) body += `<section class="card"><h2>Оставлены без переименования</h2>${kept.map(e=>`<div class="film"><div class="path">${esc(e.path)}</div><button class="mini" data-a="${on(async()=>{await doState('setRenamePreference',e.id,'auto');await loadDiskExtras();render();})}">Снова предлагать имя</button></div>`).join('')}</section>`;
   }
   const scanNote = ui.scan ? `<div class="notice">${esc(ui.scan.current || '')}${ui.scan.found ? ` · найдено: ${ui.scan.found}` : ''}</div>` : '';
   return `<div class="head"><div><h1>Диски</h1><div class="sub">Программа только читает папки. Удалять и перемещать фильмы ты будешь сам.</div></div></div>${lost}${scanNote}${tabHtml}${body}`;
@@ -458,6 +463,13 @@ function modal() {
   const close = `<button class="mini" data-a="${on(() => { ui.modal = null; render(); })}">Закрыть</button>`;
   let body = '';
   let title = '';
+  if (m.type === 'file-name') {
+    title = 'Имя конкретного файла или папки';
+    const e = ui.state.files[m.id];
+    const ext = e.kind === 'file' ? String(e.path).match(/\.[^./\\]+$/)?.[0] || '' : '';
+    const bodyName = ext && m.name.toLowerCase().endsWith(ext.toLowerCase()) ? m.name.slice(0,-ext.length) : m.name;
+    body = `<div class="sub">Расширение ${esc(ext||'(папка)')} сохраняется отдельно. Название в библиотеке и имена других копий не меняются. Год введи в самом имени, если он нужен.</div><input id="custom-file-name" class="field wide" value="${esc(bodyName)}"><button class="btn primary" data-a="${on(async()=>{await doState('setRenamePreference',m.id,'custom',document.getElementById('custom-file-name').value);ui.modal=null;await loadDiskExtras();render();})}">Сохранить предложение</button>`;
+  }
   if (m.type === 'queue') {
     const q = directorQueue(m.tmdbId);
     title = 'Очередь режиссёра заполнена';
@@ -542,10 +554,10 @@ function renderInner() {
   let html;
   if (gate) html = `<div class="main">${gate}</div>`;
   else {
-    const screens = { library, near, rewatch, morning, review, download, disks };
+    const screens = { library, near, rewatch, morning, review, download, disks, night, 'night-prep': nightPrep };
     html = navHtml() + `<main class="main">${(screens[ui.screen] || library)()}</main>`;
   }
-  const mdl = ui.modal && ui.modal.type === 'rename' ? renameModal() : modal();
+  const mdl = ui.modal && ui.modal.type.startsWith('night-') ? nightModal() : ui.modal && ui.modal.type === 'rename' ? renameModal() : modal();
   $app.innerHTML = `<div class="app">${html}${mdl}${menu()}${ui.toast ? `<div class="toast" role="status">${esc(ui.toast)}${ui.toastAction ? `<button class="mini" data-a="${on(ui.toastAction.run)}">${esc(ui.toastAction.label)}</button>` : ''}</div>` : ''}</div>`;
   const shadeAfter = document.querySelector('.shade');
   if (shadeAfter && shadeBefore) shadeAfter.scrollTop = shadeTop;

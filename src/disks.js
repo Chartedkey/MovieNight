@@ -1,7 +1,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const { scanFolder } = require('./scanner');
+const { scanFolder, parseName } = require('./scanner');
 const { probeEntry } = require('./probe');
 const { norm } = require('./matcher');
 const { renameTitle } = require('./filenames');
@@ -131,7 +131,7 @@ const diskMethods = {
       const id = idOf(e.path);
       const old = this.entries()[id];
       const same = old && old.size === e.size && old.mtime === e.mtime;
-      this.entries()[id] = same ? { ...old, ...e, duration: old.duration, subs: old.subs, probed: old.probed, filmKey: old.filmKey, state: old.state, candidates: old.candidates, matchMethod: old.matchMethod, forceReview: old.forceReview } : { ...e, id, role: folder.role, probed: false, state: null };
+      this.entries()[id] = same ? { ...old, ...e, duration: old.duration, subs: old.subs, probed: old.probed, filmKey: old.filmKey, state: old.state, candidates: old.candidates, matchMethod: old.matchMethod, forceReview: old.forceReview } : { ...e, id, role: folder.role, probed: false, state: null, renamePreference: old?.renamePreference, customName: old?.customName };
       this.entries()[id].id = id;
       this.entries()[id].role = folder.role;
     });
@@ -285,22 +285,37 @@ const diskMethods = {
     return out;
   },
 
+  setRenamePreference(id, mode, name = '') {
+    const e = this.entries()[id];
+    if (!e) throw new Error('Файл не найден.');
+    if (!['auto', 'keep', 'custom'].includes(mode)) throw new Error('Неизвестный режим имени.');
+    let clean = String(name).trim();
+    if (mode === 'custom') {
+      const ext = e.kind === 'file' ? path.extname(e.path) : '';
+      if (ext && clean.toLowerCase().endsWith(ext.toLowerCase())) clean = clean.slice(0, -ext.length);
+      if (!clean || /[<>:"/\\|?*\x00-\x1f]/.test(clean) || /[. ]$/.test(clean) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(clean) || clean.length > 180) throw new Error('Введи допустимое имя Windows без пути; расширение сохраняется отдельно.');
+    }
+    e.renamePreference = mode;
+    e.customName = mode === 'custom' ? clean : null;
+    this.save(); return this.state;
+  },
+
   renamePlan() {
     const plan = [];
     Object.values(this.entries()).forEach((e) => {
-      if (e.state !== 'linked' || e.role === 'exclude') return;
+      if (e.state !== 'linked' || e.role === 'exclude' || e.renamePreference === 'keep') return;
       const f = this.state.films[e.filmKey];
-      if (!f || !f.year) return;
+      if (!f || (!f.year && e.renamePreference !== 'custom')) return;
       const base = renameTitle(f, e);
       if (!base) return;
       const isFile = e.kind === 'file';
       const ext = isFile ? path.extname(e.path) : '';
-      const to = `${base} (${f.year})${ext}`;
+      const to = e.renamePreference === 'custom' ? `${e.customName}${ext}` : `${base} (${f.year})${ext}`;
       if (to !== path.basename(e.path)) plan.push({
         id: e.id, from: path.basename(e.path), to, dir: path.dirname(e.path), filmKey: f.key, title: base,
         matchMethod: e.matchMethod || 'unknown', fileYear: e.year || null, filmYear: f.year,
         duration: e.duration || null,
-        requiresConfirmation: base !== e.title || !e.year || e.year !== f.year || !e.matchMethod || ['name', 'duration', 'moved'].includes(e.matchMethod),
+        requiresConfirmation: e.renamePreference === 'custom' || base !== e.title || !e.year || e.year !== f.year || !e.matchMethod || ['name', 'duration', 'moved'].includes(e.matchMethod),
       });
     });
     return plan;
@@ -322,8 +337,7 @@ const diskMethods = {
         delete this.entries()[p.id];
         const nid = idOf(to);
         this.entries()[nid] = { ...e, id: nid, path: to, name: p.to, video: e.video && e.video.startsWith(from) ? to + e.video.slice(from.length) : e.video };
-        const y = this.state.films[e.filmKey].year;
-        this.entries()[nid].year = y;
+        Object.assign(this.entries()[nid], parseName(p.to, e.kind === 'file'));
       } catch (err) {
         failed.push({ from: p.from, why: err.message });
       }
