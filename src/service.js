@@ -349,7 +349,7 @@ class Service {
     for (const id of ids) {
       try {
         const d = await this.detail(id);
-        out[id] = { poster: d.poster, directors: d.directors.map((x) => x.name), runtime: d.runtime, countries: d.countries, overview: d.overview };
+        out[id] = { poster: d.poster, directors: d.directors.map((x) => x.name), directorIds: d.directors.map((x) => x.id), runtime: d.runtime, countries: d.countries, overview: d.overview };
       } catch (e) {
         if (e.kind === 'auth' || e.kind === 'network') throw e;
       }
@@ -551,8 +551,31 @@ class Service {
     byDir.forEach((list) => {
       const nearIds = new Set(this.state.near.flatMap((e) => e.ids));
       list.sort((a, b) => (nearIds.has(b.key) ? 1 : 0) - (nearIds.has(a.key) ? 1 : 0));
-      list.forEach((f, i) => { f.status = i < QUEUE_MAX ? 'queue' : 'reserve'; });
+      const chosen = list.filter((f) => f.status === 'queue' && f.queueChosen);
+      let available = Math.max(0, QUEUE_MAX - chosen.length);
+      list.forEach((f) => {
+        if (chosen.includes(f)) return;
+        f.status = available-- > 0 ? 'queue' : 'reserve';
+      });
     });
+  }
+
+  enqueueFilm(f, options = {}) {
+    const queue = Object.values(this.state.films).filter((x) => x.dir === f.dir && x.status === 'queue' && x.key !== f.key);
+    const replace = options.replaceKey && this.state.films[options.replaceKey];
+    if (options.replaceKey && (!replace || replace.dir !== f.dir || replace.status !== 'queue' || replace.key === f.key)) {
+      throw new Error('Выбранный фильм уже не находится в очереди этого режиссёра.');
+    }
+    if (!replace && f.status !== 'queue' && queue.length >= QUEUE_MAX && options.allowExtra !== true) {
+      throw new Error('В очереди уже 3 фильма или больше. Подтверди добавление или выбери фильм для замены.');
+    }
+    queue.forEach((x) => { x.queueChosen = true; });
+    if (replace) {
+      replace.status = 'disk';
+      replace.queueChosen = false;
+    }
+    f.status = 'queue';
+    f.queueChosen = true;
   }
 
   queueCount(dir) {
@@ -679,7 +702,7 @@ class Service {
   }
 
   chooseNext(dirId, keys) {
-    keys.forEach((k) => { const f = this.mustFilm(k); f.status = 'queue'; });
+    keys.forEach((k) => { const f = this.mustFilm(k); f.status = 'queue'; f.queueChosen = true; });
     this.state.directors[dirId].needsChoice = this.queueCount(dirId) < QUEUE_MIN;
     this.rebuildQueues();
     this.save();
@@ -694,10 +717,10 @@ class Service {
     };
   }
 
-  async addFilm(tmdbId) {
+  async addFilm(tmdbId, options = {}) {
     const det = await this.detail(tmdbId);
-    const f = this.ensureFilm(det);
-    if (['candidate', 'disk'].includes(f.status)) f.status = 'queue';
+    const f = this.ensureFilm(det, { status: 'disk' });
+    if (['candidate', 'disk', 'reserve'].includes(f.status)) this.enqueueFilm(f, options);
     this.rebuildQueues();
     this.save();
     return { state: this.state, film: f };

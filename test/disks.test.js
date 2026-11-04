@@ -292,3 +292,46 @@ test('учёт новой копии не сбрасывает очередь, �
     assert.equal(s.state.files.copy.filmKey, 'm900');
   }
 });
+
+test('добавление сверх трёх требует подтверждения и сохраняет всю очередь после пересчёта и перезапуска', async () => {
+  const s = svc();
+  for (let i = 1; i <= 3; i++) s.state.films[`m${i}`] = film(i, `Фильм ${i}`, 2000, {dir:9});
+  s.state.files = { x: { id:'x', title:'Новый', year:2001, state:'orphan' } };
+  await assert.rejects(s.addEntryFilm('x', 900, 'queue'), /Подтверди/);
+  assert.equal(s.queueCount(9), 3);
+  assert.equal(s.state.files.x.state, 'orphan');
+  await s.addEntryFilm('x', 900, 'queue', {allowExtra:true});
+  assert.equal(s.queueCount(9), 4);
+  s.rebuildQueues();
+  assert.equal(s.queueCount(9), 4);
+  const restored = new Service({dir:s.dir, tmdb:s.tmdb});
+  restored.rebuildQueues();
+  assert.equal(restored.queueCount(9), 4);
+  assert.equal(restored.state.files.x.filmKey, 'm900');
+});
+
+test('замена сохраняет данные старого фильма и не возвращает его автоматически в очередь', async () => {
+  const s = svc();
+  for (let i = 1; i <= 3; i++) s.state.films[`m${i}`] = film(i, `Фильм ${i}`, 2000, {dir:9, rating:8});
+  s.state.files = {old:{id:'old',filmKey:'m1',state:'linked'}, x:{id:'x',title:'Новый',year:2001,state:'orphan'}};
+  await assert.rejects(s.addEntryFilm('x',900,'queue',{replaceKey:'missing'}), /уже не находится/);
+  await s.addEntryFilm('x',900,'queue',{replaceKey:'m1'});
+  assert.equal(s.queueCount(9),3);
+  assert.equal(s.state.films.m1.status,'disk');
+  assert.equal(s.state.films.m1.rating,8);
+  assert.equal(s.state.files.old.filmKey,'m1');
+  s.rebuildQueues();
+  s.afterQueueChange(9);
+  assert.equal(s.state.films.m1.status,'disk');
+  assert.equal(s.state.films.m900.status,'queue');
+});
+
+test('добавление учтённого фильма соблюдает подтверждение и очередь из сведений о кандидате', async () => {
+  const s=svc();
+  for(let i=1;i<=3;i++) s.state.films[`m${i}`]=film(i,`Фильм ${i}`,2000,{dir:9});
+  await assert.rejects(s.addFilm(900), /Подтверди/);
+  await s.addFilm(900,{allowExtra:true});
+  assert.equal(s.queueCount(9),4);
+  const info=await s.candidateInfo([900]);
+  assert.deepEqual(info[900].directorIds,[9]);
+});

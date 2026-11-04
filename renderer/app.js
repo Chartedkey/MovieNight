@@ -199,10 +199,42 @@ async function loadOrphans() {
   }
   ui.orphanLoading = false;
 }
+function directorQueue(tmdbId) {
+  const f = ui.state.films[`m${tmdbId}`];
+  const info = ui.candInfo[tmdbId];
+  const dir = f ? f.dir : info && info.directorIds && info.directorIds[0];
+  if (dir == null) return null;
+  const films = Object.values(ui.state.films).filter((x) => x.dir === dir && x.status === 'queue');
+  return { dir, films, name: (ui.state.directors[dir] || {}).name || (info && info.directors[0]) || 'Режиссёр' };
+}
+function queueContext(tmdbId) {
+  const q = directorQueue(tmdbId);
+  if (!q) return '<div class="sub">Очередь режиссёра пока не определена.</div>';
+  return `<div class="sub" style="margin-top:8px">${esc(q.name)} · в очереди: ${q.films.length}${q.films.length ? `<br>${q.films.map((f) => esc(titleOf(f))).join(' · ')}` : '<br>Пока нет выбранных фильмов.'}</div>${q.films.length >= 3 ? '<div class="sub warn">В очереди уже 3 фильма или больше. Можно добавить ещё один или заменить выбранный.</div>' : ''}`;
+}
+async function requestQueueAdd(tmdbId, entryId = null) {
+  if (!directorQueue(tmdbId)) Object.assign(ui.candInfo, await call('candidateInfo', [tmdbId]));
+  const q = directorQueue(tmdbId);
+  if (!q) { say('Не удалось определить режиссёра. Попробуй загрузить сведения ещё раз.'); return; }
+  const f = ui.state.films[`m${tmdbId}`];
+  if (q.films.length >= 3 && (!f || f.status !== 'queue')) {
+    ui.modal = { type: 'queue', tmdbId, entryId };
+    render();
+    return;
+  }
+  await applyQueueAdd(tmdbId, entryId);
+}
+async function applyQueueAdd(tmdbId, entryId, options = {}) {
+  if (entryId != null) await doState('addEntryFilm', entryId, tmdbId, 'queue', options);
+  else await doState('addFilm', tmdbId, options);
+  ui.modal = null;
+  render();
+}
+
 function orphanCard(e) {
   const mine = (e.candidates || []).map((k) => ui.state.films[k]).filter(Boolean);
   const found = ui.orphanSearch[e.id] || [];
-  const candRow = (c) => { const i = ui.candInfo[c.id]; return `<div class="film choice"><div class="fwrap">${posterHtml(i && i.poster)}<div style="min-width:0"><div class="ftitle">${esc(c.title)}${c.year ? ` (${c.year})` : ''}</div><div class="fmeta">${esc(c.originalTitle || '')}</div><div class="fmeta">${esc(i ? [i.directors.join(', '), i.runtime ? `${i.runtime} мин` : null].filter(Boolean).join(' · ') : '')}</div></div></div><div class="col2"><button class="mini on" data-a="${on(() => doState('addEntryFilm', e.id, c.id, false))}">Добавить в очередь</button><button class="mini" title="Запомнить фильм и его файлы без добавления в очередь просмотра" data-a="${on(() => doState('addEntryFilm', e.id, c.id, 'disk'))}">Только учитывать на диске</button><button class="mini" data-a="${on(() => doState('addEntryFilm', e.id, c.id, true))}">Уже смотрел</button></div></div>`; };
+  const candRow = (c) => { const i = ui.candInfo[c.id]; return `<div class="film choice"><div class="fwrap">${posterHtml(i && i.poster)}<div style="min-width:0"><div class="ftitle">${esc(c.title)}${c.year ? ` (${c.year})` : ''}</div><div class="fmeta">${esc(c.originalTitle || '')}</div><div class="fmeta">${esc(i ? [i.directors.join(', '), i.runtime ? `${i.runtime} мин` : null].filter(Boolean).join(' · ') : '')}</div>${queueContext(c.id)}</div></div><div class="col2"><button class="mini on" data-a="${on(() => requestQueueAdd(c.id, e.id))}">Добавить в очередь</button><button class="mini" title="Запомнить фильм и его файлы без добавления в очередь просмотра" data-a="${on(() => doState('addEntryFilm', e.id, c.id, 'disk'))}">Только учитывать на диске</button><button class="mini" data-a="${on(() => doState('addEntryFilm', e.id, c.id, true))}">Уже смотрел</button></div></div>`; };
   return `<section class="card"><div><h2>${esc(e.title)}${e.year ? ` (${e.year})` : ''}</h2><div class="path">${esc(e.path)}</div><div class="sub">${kindName[e.kind] || ''} · ${gb(e.size)}${e.duration ? ` · ${e.duration} мин` : ''}</div></div>${mine.length ? `<div class="sub warn">Совпало с несколькими фильмами списка:</div>${mine.map((f) => `<div class="film"><div class="fwrap">${posterHtml(f.poster)}<div class="ftitle">${filmLine(f)}<div class="fmeta">${esc((ui.state.directors[f.dir] || {}).name || '')}${f.runtime ? ` · ${f.runtime} мин` : ''}</div></div></div><button class="mini on" data-a="${on(() => doState('chooseEntryFilm', e.id, f.key))}">Это он</button></div>`).join('')}` : ''}<div class="list">${found.map(candRow).join('') || (mine.length ? '' : '<div class="sub">Ищу варианты…</div>')}</div><div class="row"><input class="field" id="orp${esc(e.id)}" data-orpq="${esc(e.id)}" aria-label="Поиск в TMDB" placeholder="Название, режиссёр или ссылка TMDB" value="${esc(ui.orphanQ[e.id] || '')}"><button class="btn" data-a="${on(async () => { const r = await call('searchForReview', ui.orphanQ[e.id] || e.title); ui.orphanSearch[e.id] = r.cands; Object.assign(ui.candInfo, await call('candidateInfo', r.cands.map((c) => c.id))); render(); })}">Найти</button><button class="btn ghost" data-a="${on(() => call('openEntry', e.id))}">Открыть папку</button><button class="btn ghost" data-a="${on(() => doState('ignoreEntry', e.id))}">Игнорировать</button></div></section>`;
 }
 function disks() {
@@ -224,7 +256,7 @@ function disks() {
   }
   if (ui.diskTab === 'stored') {
     const stored = Object.values(s.films).filter((f) => f.status === 'disk');
-    body = `<div class="sub">Фильмы учтены для поиска файлов и дублей, но не добавлены в очередь просмотра. Добавить их можно в любой момент.</div><div class="list">${stored.map((f) => filmRow(f, `<button class="mini on" data-a="${on(() => doState('addFilm', f.tmdbId))}">Добавить в очередь</button>`)).join('') || '<div class="card sub">Пока пусто.</div>'}</div>`;
+    body = `<div class="sub">Фильмы учтены для поиска файлов и дублей, но не добавлены в очередь просмотра. Добавить их можно в любой момент.</div><div class="list">${stored.map((f) => `<section class="card">${filmRow(f, `<button class="mini on" data-a="${on(() => requestQueueAdd(f.tmdbId))}">Добавить в очередь</button>`)}${queueContext(f.tmdbId)}</section>`).join('') || '<div class="card sub">Пока пусто.</div>'}</div>`;
   }
   if (ui.diskTab === 'dups') {
     body = `<div class="grid wide">${ui.dups.map((d) => { const f = s.films[d.key]; return `<section class="card"><div class="row between"><h2>${filmLine(f)}</h2><span class="tag ${d.identical ? 'bad' : 'gold'}">${d.identical ? 'Вероятно, точная копия' : 'Разный размер'}</span></div>${d.copies.map((c) => `<div class="film"><div><div class="ftitle">${gb(c.size)} · ${kindName[c.kind] || ''}${c.role === 'today' ? ' · в «Сегодня»' : ''}</div><div class="path">${esc(c.path)}</div></div><button class="mini" data-a="${on(() => call('openEntry', c.id))}">Открыть папку</button></div>`).join('')}<div class="row"><button class="mini" data-a="${on(async () => { await doState('duplicateOk', d.key); await loadDiskExtras(); })}">Это разные версии, не напоминать</button></div></section>`; }).join('') || '<div class="card sub">Дублей не найдено.</div>'}</div>`;
@@ -315,6 +347,14 @@ function modal() {
   const close = `<button class="mini" data-a="${on(() => { ui.modal = null; render(); })}">Закрыть</button>`;
   let body = '';
   let title = '';
+  if (m.type === 'queue') {
+    const q = directorQueue(m.tmdbId);
+    title = 'Очередь режиссёра заполнена';
+    body = `${queueContext(m.tmdbId)}<div class="row"><button class="btn primary" data-a="${on(() => applyQueueAdd(m.tmdbId, m.entryId, { allowExtra: true }))}">Добавить ещё одним (${q.films.length + 1}-м)</button></div><h3>Или заменить фильм в очереди</h3><div class="sub">Заменённый фильм останется учтённым. Его файлы, оценки и отметки сохранятся.</div><div class="list">${q.films.map((f) => `<div class="film"><div class="ftitle">${esc(titleOf(f))}</div><button class="mini" data-a="${on(() => applyQueueAdd(m.tmdbId, m.entryId, { replaceKey: f.key }))}">Заменить этот</button></div>`).join('')}</div><button class="btn ghost" data-a="${on(async () => {
+      if (m.entryId != null) await doState('addEntryFilm', m.entryId, m.tmdbId, 'disk');
+      ui.modal = null; render();
+    })}">Только учитывать на диске</button>`;
+  }
   if (m.type === 'loading') { title = m.title; body = '<div class="sub">Подожди немного.</div>'; }
   if (m.type === 'markup') {
     const d = ui.state.directors[m.dir];
@@ -335,7 +375,7 @@ function modal() {
   if (m.type === 'add') {
     title = 'Добавить фильм или режиссёра';
     const r = m.results;
-    body = `<div class="row"><input id="addq" class="field" aria-label="Поиск в TMDB" placeholder="Название или имя" value="${esc(m.q)}"><button class="btn primary" data-a="${on(async () => { m.results = await call('searchAdd', m.q); render(); })}">Найти</button></div>${r ? `<div class="list">${r.people.map((p) => `<div class="film"><div><div class="ftitle">${esc(p.name)}</div><div class="fmeta">Режиссёр${p.inLibrary ? ' · уже в библиотеке' : ''}</div></div><button class="btn primary" data-a="${on(async () => { ui.modal = { type: 'loading', title: 'Загружаю фильмографию' }; render(); const x = await doState('addDirector', { id: p.id, name: p.name }); await openNext(x.dirId); })}">Добавить режиссёра</button></div>`).join('')}${r.films.map((c) => `<div class="film"><div><div class="ftitle">${esc(c.title)}${c.year ? ` (${c.year})` : ''}</div><div class="fmeta">Фильм · ${esc(c.originalTitle || '')}</div></div><button class="btn primary" data-a="${on(async () => { await doState('addFilm', c.id); ui.modal = null; say('Фильм добавлен к своему режиссёру. Проверка файла появится с подключением дисков.'); })}">Добавить фильм</button></div>`).join('') || (r.people.length ? '' : '<div class="sub">Ничего не нашлось.</div>')}</div>` : ''}`;
+    body = `<div class="row"><input id="addq" class="field" aria-label="Поиск в TMDB" placeholder="Название или имя" value="${esc(m.q)}"><button class="btn primary" data-a="${on(async () => { m.results = await call('searchAdd', m.q); render(); })}">Найти</button></div>${r ? `<div class="list">${r.people.map((p) => `<div class="film"><div><div class="ftitle">${esc(p.name)}</div><div class="fmeta">Режиссёр${p.inLibrary ? ' · уже в библиотеке' : ''}</div></div><button class="btn primary" data-a="${on(async () => { ui.modal = { type: 'loading', title: 'Загружаю фильмографию' }; render(); const x = await doState('addDirector', { id: p.id, name: p.name }); await openNext(x.dirId); })}">Добавить режиссёра</button></div>`).join('')}${r.films.map((c) => `<div class="film"><div><div class="ftitle">${esc(c.title)}${c.year ? ` (${c.year})` : ''}</div><div class="fmeta">Фильм · ${esc(c.originalTitle || '')}</div></div><button class="btn primary" data-a="${on(async () => { await requestQueueAdd(c.id); })}">Добавить фильм</button></div>`).join('') || (r.people.length ? '' : '<div class="sub">Ничего не нашлось.</div>')}</div>` : ''}`;
   }
   return `<div class="shade"><div class="modal" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="row between"><h2>${esc(title)}</h2>${close}</div>${body}</div></div>`;
 }
