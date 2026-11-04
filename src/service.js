@@ -690,7 +690,7 @@ class Service {
   async addFilm(tmdbId) {
     const det = await this.detail(tmdbId);
     const f = this.ensureFilm(det);
-    if (f.status === 'candidate') f.status = 'queue';
+    if (['candidate', 'disk'].includes(f.status)) f.status = 'queue';
     this.rebuildQueues();
     this.save();
     return { state: this.state, film: f };

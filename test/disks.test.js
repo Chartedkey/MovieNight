@@ -250,3 +250,45 @@ test('переименование: только внешнее имя, с жу�
   await s.undoRename(0);
   assert.ok(fs.existsSync(path.join(r, 'Мечта', 'VIDEO_TS')));
 });
+
+test('учёт на диске сохраняет связи и дубли без очереди и переживает перезапуск', async () => {
+  const r = tmp();
+  big(path.join(r, 'Новый (2001).mkv'));
+  big(path.join(r, 'Новый (2001)', 'movie.mkv'));
+  const s = svc();
+  s.addFolder(r);
+  await s.scanAll();
+  const entry = Object.values(s.state.files)[0];
+  await s.addEntryFilm(entry.id, 900, 'disk');
+  assert.equal(s.state.films.m900.status, 'disk');
+  assert.equal(s.queueCount(9), 0);
+  assert.equal(s.state.directors[9].needsChoice, false);
+  assert.equal(s.state.films.m900.pending, false);
+  assert.equal(s.state.films.m900.moveTask, false);
+  assert.equal(s.state.near.length, 0);
+  assert.equal(s.filmEntries('m900').length, 2);
+  assert.equal(s.duplicates().length, 1);
+  const restored = new Service({ dir: s.dir, tmdb: s.tmdb });
+  await restored.scanAll();
+  restored.afterQueueChange(9);
+  assert.equal(restored.state.films.m900.status, 'disk', 'не попадает в очередь автоматически');
+  assert.equal(restored.filmEntries('m900').length, 2);
+  await restored.addFilm(900);
+  assert.equal(restored.state.films.m900.status, 'queue', 'можно явно добавить в очередь позже');
+});
+
+test('учёт новой копии не сбрасывает очередь, оценку и историю известного фильма', async () => {
+  for (const status of ['queue', 'watched']) {
+    const s = svc();
+    const det = await s.detail(900);
+    const f = s.ensureFilm(det, { status });
+    f.rating = 8;
+    f.watched = [{ date: '2026-11-01', result: 'watched' }];
+    s.state.files = { copy: { id: 'copy', title: 'Другое имя', year: 2001, state: 'orphan' } };
+    await s.addEntryFilm('copy', 900, 'disk');
+    assert.equal(f.status, status);
+    assert.equal(f.rating, 8);
+    assert.deepEqual(f.watched, [{ date: '2026-11-01', result: 'watched' }]);
+    assert.equal(s.state.files.copy.filmKey, 'm900');
+  }
+});

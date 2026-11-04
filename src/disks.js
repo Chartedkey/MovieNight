@@ -224,16 +224,22 @@ const diskMethods = {
     return this.state;
   },
   // Файл на диске, которого нет в списке: добавить или сразу отметить просмотренным.
-  async addEntryFilm(id, tmdbId, watched = false) {
+  async addEntryFilm(id, tmdbId, action = false) {
+    // Boolean arguments remain compatible with older renderer calls.
+    const mode = action === true ? 'watched' : action === false ? 'queue' : action;
+    if (!['queue', 'watched', 'disk'].includes(mode)) throw new Error('Неизвестное действие с фильмом.');
+    if (!this.entries()[id]) throw new Error('Файл не найден.');
+    const watched = mode === 'watched';
     const det = await this.detail(tmdbId);
-    const f = this.ensureFilm(det, { userTitle: this.entries()[id].title });
-    if (f.status === 'candidate' || watched) f.status = watched ? 'watched' : 'queue';
+    const f = this.ensureFilm(det, { userTitle: this.entries()[id].title, status: mode });
+    if (mode === 'queue' && f.status === 'disk') f.status = 'queue';
+    if ((mode === 'queue' && f.status === 'candidate') || watched) f.status = watched ? 'watched' : 'queue';
     if (watched) { f.pending = true; f.watched.push({ date: new Date().toISOString().slice(0, 10), result: 'watched' }); }
     this.linkEntryToFilm(id, f.key);
     this.rebuildQueues();
     this.linkAll();
     this.refreshTasks();
-    this.afterQueueChange(f.dir);
+    if (mode !== 'disk') this.afterQueueChange(f.dir);
     // Разбор старых фильмов не должен заваливать вопросами о режиссёрах, которых нет в списке.
     const d = this.state.directors[f.dir];
     if (watched && d && Object.values(this.state.films).filter((x) => x.dir === f.dir).length === 1) d.needsChoice = false;
