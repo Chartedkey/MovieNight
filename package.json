@@ -1,7 +1,7 @@
 {
   "name": "movie-night",
   "productName": "Movie Night",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "description": "Личный каталог фильмов: очереди по режиссёрам, диски и планирование киноночи",
   "main": "electron/main.js",
   "author": "Chartedkey",
@@ -9,12 +9,13 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "test": "node --test test/service.test.js",
+    "test": "node --test test/service.test.js test/disks.test.js",
     "dist": "electron-builder --win",
     "release": "electron-builder --win --publish always"
   },
   "dependencies": {
-    "electron-updater": "6.3.9"
+    "electron-updater": "6.3.9",
+    "ffprobe-static": "3.1.0"
   },
   "devDependencies": {
     "electron": "33.2.1",
@@ -26,7 +27,10 @@
     "files": [
       "electron/**",
       "src/**",
-      "renderer/**"
+      "renderer/**",
+      "!node_modules/ffprobe-static/bin/darwin/**",
+      "!node_modules/ffprobe-static/bin/linux/**",
+      "!node_modules/ffprobe-static/bin/win32/ia32/**"
     ],
     "directories": {
       "buildResources": "build",
@@ -50,6 +54,9 @@
         "repo": "MovieNight",
         "releaseType": "release"
       }
+    ],
+    "asarUnpack": [
+      "node_modules/ffprobe-static/bin/win32/x64/**"
     ]
   }
 }

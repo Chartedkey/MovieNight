@@ -47,7 +47,7 @@ function createTmdb({ key, fetchImpl, language = 'ru-RU', minGapMs = 60, sleep }
   return {
     get,
     ping: () => get('/configuration'),
-    details: (id) => get(`/movie/${id}`, { append_to_response: 'credits,translations' }),
+    details: (id) => get(`/movie/${id}`, { append_to_response: 'credits,translations,alternative_titles' }),
     credits: (personId) => get(`/person/${personId}/movie_credits`),
     searchMovie: (query) => get('/search/movie', { query, include_adult: 'false' }),
     searchPerson: (query) => get('/search/person', { query, include_adult: 'false' }),

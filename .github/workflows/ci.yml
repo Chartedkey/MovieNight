@@ -23,3 +23,4 @@ jobs:
           cat smoke.txt || true
           cat smoke-data/movie-night.log || true
           grep -q "Подключим TMDB" smoke.txt
+          grep -q "FFPROBE: ffprobe version" smoke.txt

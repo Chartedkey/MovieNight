@@ -144,6 +144,7 @@ class Service {
       voteAverage: d.vote_average || 0,
       voteCount: d.vote_count || 0,
       directors: crew.filter((c) => c.job === 'Director').map((c) => ({ id: c.id, name: c.name })),
+      altTitles: ((d.alternative_titles && d.alternative_titles.titles) || []).map((t) => t.title),
       released: d.status === 'Released',
     };
     this.details.set(id, out);
@@ -476,7 +477,7 @@ class Service {
       films[key] = {
         key, tmdbId: d.id, userTitle: extra.userTitle || null, tmdbTitle: d.title || d.displayTitle || null,
         originalTitle: d.originalTitle, year: d.year, runtime: d.runtime, countries: d.countries, genres: d.genres,
-        overview: d.overview, poster: d.poster, popularity: d.popularity, voteAverage: d.voteAverage, voteCount: d.voteCount,
+        altTitles: d.altTitles || [], overview: d.overview, poster: d.poster, popularity: d.popularity, voteAverage: d.voteAverage, voteCount: d.voteCount,
         directorIds: d.directors.map((x) => x.id), dir: extra.dir ?? (d.directors[0] ? d.directors[0].id : null),
         kpLink: extra.link || null, status: extra.status || 'queue', rating: null, rewatch: false, pending: false, wish: false, watched: [],
       };
@@ -578,6 +579,7 @@ class Service {
     }
     this.dropNear(key);
     this.afterQueueChange(f.dir);
+    if (this.refreshTasks) this.refreshTasks();
     this.save();
     return { state: this.state, askDirector: this.state.directors[f.dir] && this.state.directors[f.dir].needsChoice ? f.dir : null };
   }
@@ -657,6 +659,7 @@ class Service {
     f.status = status;
     f.wish = !!wish;
     if (status !== 'candidate') this.dropNear(key);
+    this.refreshTasks();
     this.afterQueueChange(f.dir);
     this.save();
     return this.state;
@@ -702,5 +705,7 @@ class Service {
     return { state: this.state, dirId: person.id };
   }
 }
+
+Object.assign(Service.prototype, require('./disks').diskMethods);
 
 module.exports = { Service, findInFilmography, emptyState, filmKey, QUEUE_MIN, QUEUE_MAX, SHORT_MINUTES };

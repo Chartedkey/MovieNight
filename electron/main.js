@@ -34,10 +34,19 @@ function writeKey(key) {
   fs.writeFileSync(keyFile(), data, { mode: 0o600 });
 }
 
+function ffprobePath() {
+  try {
+    return require('ffprobe-static').path.replace('app.asar', 'app.asar.unpacked');
+  } catch (e) {
+    logLine(`ffprobe: ${e.message}`);
+    return null;
+  }
+}
+
 const makeTmdb = (key) => createTmdb({ key, fetchImpl: (url, opts) => net.fetch(url, opts) });
 
 // Методы, которые может вызывать интерфейс. Остальное в процесс не проникает.
-const SERVICE_METHODS = new Set(['getState', 'loadSeed', 'runImport', 'stopImport', 'progress', 'reviewList', 'resolveItem', 'skipItem', 'searchForReview', 'directorFilms', 'candidateInfo', 'rescueReview', 'setFilmStatus', 'rate', 'toggleRewatch', 'finishReview', 'setTitle', 'toggleFav', 'ban', 'addNear', 'removeNear', 'moveNear', 'filmography', 'markFilm', 'finishMarkup', 'chooseNext', 'searchAdd', 'addFilm', 'addDirector']);
+const SERVICE_METHODS = new Set(['getState', 'loadSeed', 'runImport', 'stopImport', 'progress', 'reviewList', 'resolveItem', 'skipItem', 'searchForReview', 'directorFilms', 'addFolder', 'removeFolder', 'setFolderRole', 'setAllConnected', 'scanAll', 'updateFolderPath', 'confirmLost', 'chooseEntryFilm', 'addEntryFilm', 'ignoreEntry', 'unignoreEntry', 'entryIsFilm', 'excludeSeriesFolder', 'keepOnDisk', 'duplicateOk', 'duplicates', 'renamePlan', 'applyRename', 'undoRename', 'candidateInfo', 'rescueReview', 'setFilmStatus', 'rate', 'toggleRewatch', 'finishReview', 'setTitle', 'toggleFav', 'ban', 'addNear', 'removeNear', 'moveNear', 'filmography', 'markFilm', 'finishMarkup', 'chooseNext', 'searchAdd', 'addFilm', 'addDirector']);
 
 const local = {
   async hasKey() { return !!service.tmdb; },
@@ -58,6 +67,18 @@ const local = {
   async openExternal(url) {
     if (/^https:\/\/(www\.)?kinopoisk\.ru\//.test(url) || /^https:\/\/(www\.)?themoviedb\.org\//.test(url)) await shell.openExternal(url);
   },
+  async pickFolder() {
+    const r = await dialog.showOpenDialog(win, { title: 'Выбери папку с фильмами', properties: ['openDirectory'] });
+    return r.canceled ? null : r.filePaths[0];
+  },
+  // Открывается только то, что нашёл сканер.
+  async openEntry(id) {
+    const e = service.getState().files && service.getState().files[id];
+    if (!e) return false;
+    if (e.file || e.kind === 'file') shell.showItemInFolder(e.video || e.path);
+    else { const err = await shell.openPath(e.path); if (err) throw new Error(err); }
+    return true;
+  },
   async version() { return app.getVersion(); },
   async logPath() { return path.join(app.getPath('userData'), 'movie-night.log'); },
   async installUpdate() { autoUpdater.quitAndInstall(); },
@@ -77,6 +98,8 @@ if (process.env.MN_USERDATA) app.setPath('userData', process.env.MN_USERDATA);
 app.whenReady().then(() => {
   const dir = path.join(app.getPath('userData'), 'data');
   service = new Service({ dir, onProgress: (p) => win && win.webContents.send('progress', p) });
+  service.ffprobePath = ffprobePath();
+  service.onScan = (p) => win && win.webContents.send('scan', p);
   const key = readKey();
   if (key) service.tmdb = makeTmdb(key);
 
@@ -103,7 +126,9 @@ app.whenReady().then(() => {
         const text = await win.webContents.executeJavaScript('document.getElementById("app").innerText + " | api=" + typeof window.api').catch((e) => `ERR ${e}`);
         let log = '';
         try { log = fs.readFileSync(path.join(app.getPath('userData'), 'movie-night.log'), 'utf8'); } catch (e) { /* журнала нет */ }
-        fs.writeFileSync(process.env.MN_SMOKE, `TEXT: ${text}\nLOG: ${log}\n`);
+        let probe = 'нет';
+        try { probe = require('child_process').execFileSync(service.ffprobePath, ['-version']).toString().split('\n')[0]; } catch (e) { probe = `ОШИБКА ${e.message}`; }
+        fs.writeFileSync(process.env.MN_SMOKE, `TEXT: ${text}\nFFPROBE: ${probe}\nLOG: ${log}\n`);
         app.quit();
       }, 5000);
     }
