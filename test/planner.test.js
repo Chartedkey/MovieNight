@@ -25,3 +25,13 @@ test('ограниченный поиск сообщает об отсутств
 test('страны старой библиотеки распознаются и вне первых регионов',()=>{assert.equal(P.codeOf('Кот-д’Ивуар'),'CI');assert.equal(P.codeOf('Аргентина'),'AR');assert.equal(P.codeOf('France'),'FR');assert.equal(P.codeOf('Новая Зеландия'),'NZ');});
 
 test('изменение утверждённого плана сохраняет идентичность, но не допускается после разбора',()=>{const s=svc(),c=P.generate(s.state,config()).config;const id=s.approveNight(c,'2026-11-04').nightId;const changed=P.generate(s.state,c,{replace:0}).config;s.reviseNight(id,changed);assert.equal(s.state.nights.length,1);assert.equal(s.state.nights[0].revisions.length,1);assert.equal(s.state.nights[0].slots[0].key,changed.slots[0].film);s.setNightResult(id,0,'skipped');assert.throws(()=>s.reviseNight(id,c),/разбиралась/);});
+
+test('сброс всего подбора сохраняет библиотеку, шаблоны, историю и утверждённую ночь',()=>{
+  const s=svc(),c=P.generate(s.state,config()).config;
+  const nid=s.approveNight(c,'2026-11-04').nightId;s.saveNightTemplate('Мой шаблон',c);s.setNightResult(nid,0,'skipped');
+  c.limit=900;c.slots[0].locked=true;c.editingNightId=nid;s.saveNightDraft(c);
+  const before=JSON.parse(JSON.stringify(s.state));s.resetNightDraft();
+  assert.deepEqual(s.state.nightDraft,P.defaults());
+  for(const key of Object.keys(before).filter(k=>k!=='nightDraft'))assert.deepEqual(s.state[key],before[key],key);
+  const restored=new Service({dir:s.dir});assert.deepEqual(restored.state.nightDraft,P.defaults());assert.equal(restored.state.nights[0].slots[0].result,'skipped');assert.equal(restored.state.activeNight,nid);
+});

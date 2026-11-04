@@ -4,6 +4,7 @@ const clone=x=>JSON.parse(JSON.stringify(x));
 function getNight(s,id){const n=(s.state.nights||[]).find(n=>n.id===id);if(!n)throw Error('Ночь не найдена.');return n;}
 function getSlot(s,nid,index){const n=getNight(s,nid),slot=n.slots[index];if(!slot)throw Error('Место не найдено.');return {n,slot};}
 const nightMethods={
+  resetNightDraft(){this.state.nightDraft=P.defaults();this.save();return this.state;},
   saveNightDraft(config){P.validate(config);this.state.nightDraft=clone(config);this.save();return this.state;},
   generateNight(config,options={}){const result=P.generate(this.state,config,options);if(result.ok){this.state.nightDraft=result.config;this.save();}return {...result,state:this.state};},
   saveNightTemplate(name,config){P.validate(config);name=String(name||'').trim().slice(0,80);if(!name)throw Error('Введи название шаблона.');const template=clone(config);delete template.editingNightId;template.slots.forEach(s=>{s.film=null;s.locked=false;});this.state.nightTemplates=this.state.nightTemplates||[];this.state.nightTemplates.push({id:require('crypto').randomUUID(),name,config:template});this.save();return this.state;},

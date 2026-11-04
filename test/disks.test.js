@@ -565,3 +565,40 @@ test('источник пользовательского названия со�
   assert.equal(restored.state.films.m900.titleSource,'manual');
   assert.equal(restored.state.films.m900.userTitle,'Личное название');
 });
+
+test('сохранение имени одного файла сохраняет 50 отметок неизменившихся предложений', async () => {
+  const plan=Array.from({length:61},(_,i)=>({id:'r'+i,from:`Фильм ${i}.mkv`,to:`Фильм ${i} (2000).mkv`,dir:'/films',filmKey:'m'+i,fileYear:null,filmYear:2000,requiresConfirmation:i!==60}));
+  let current=JSON.parse(JSON.stringify(plan));
+  const renderer=orphanRenderer(async(method)=>method==='duplicates'?[]:JSON.parse(JSON.stringify(current)));
+  renderer.run(`ui.diskTab='rename';ui.plan=${JSON.stringify(plan)};ui.planOn=new Set(Array.from({length:50},(_,i)=>'r'+i));ui.planOff=new Set(['r60']);`);
+  current[55].to='Моё название.mkv';
+  await renderer.run('loadDiskExtras()');
+  assert.equal(renderer.run('ui.planOn.size'),50);
+  assert.equal(renderer.run("renameSelected(ui.plan.find(p=>p.id==='r49'))"),true);
+  assert.equal(renderer.run("renameSelected(ui.plan.find(p=>p.id==='r55'))"),false);
+  assert.equal(renderer.run("renameSelected(ui.plan.find(p=>p.id==='r60'))"),false,'невыбранная обычная строка тоже не включается обратно');
+  current[4].to='Другое имя.mkv';
+  await renderer.run('loadDiskExtras()');
+  assert.equal(renderer.run('ui.planOn.size'),49);
+  assert.equal(renderer.run("renameSelected(ui.plan.find(p=>p.id==='r4'))"),false,'новое предложение требует подтверждения только этой строки');
+  assert.equal(renderer.run("renameSelected(ui.plan.find(p=>p.id==='r49'))"),true);
+});
+
+test('подмена фильма или года и удаление строки не сохраняют старое подтверждение', async()=>{
+  const plan=[{id:'a',from:'a',to:'a (2000)',filmKey:'m1',filmYear:2000,requiresConfirmation:true},{id:'b',from:'b',to:'b (2000)',filmKey:'m2',filmYear:2000,requiresConfirmation:true}];
+  const next=[{...plan[0],filmKey:'m3'}, {id:'c',from:'c',to:'c (2000)',filmKey:'m4',requiresConfirmation:true}];
+  const renderer=orphanRenderer(async m=>m==='duplicates'?[]:next);
+  renderer.run(`ui.diskTab='rename';ui.plan=${JSON.stringify(plan)};ui.planOn=new Set(['a','b']);`);
+  await renderer.run('loadDiskExtras()');assert.equal(renderer.run('ui.planOn.size'),0);
+});
+
+test('сброс подбора ждёт уже отправленное сохранение и не выполняется дважды',async()=>{
+  const calls=[];
+  const renderer=orphanRenderer(async method=>{calls.push(method);return {nightDraft:require('../src/planner').defaults()};});
+  renderer.run("ui.nightSaving=new Promise(resolve=>{globalThis.finishSaving=resolve});ui.nightEditing='old';ui.nightMessage='Ошибка';ui.nightSeed=8");
+  const resetting=renderer.run('nReset()');await renderer.run('nReset()');
+  assert.deepEqual(calls,[]);
+  renderer.run('finishSaving()');await resetting;
+  assert.deepEqual(calls,['resetNightDraft']);
+  assert.equal(renderer.run('ui.nightResetting'),false);assert.equal(renderer.run('ui.nightEditing'),null);assert.equal(renderer.run('ui.nightMessage'),null);assert.equal(renderer.run('ui.nightEdit.slots.every(s=>!s.film&&!s.locked)'),true);
+});

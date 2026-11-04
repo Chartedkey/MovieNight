@@ -186,10 +186,17 @@ async function verifyDuplicates() {
     say(ui.dups.length ? `Проверено. Фильмов с дублями осталось: ${ui.dups.length}.` : 'Проверено: дублей не осталось.');
   }
 }
+function renameSignature(p) {
+  return JSON.stringify([p.id,p.dir,p.from,p.to,p.filmKey,p.title,p.fileYear,p.filmYear,p.matchMethod,p.requiresConfirmation,p.duration]);
+}
 async function loadDiskExtras() {
   ui.dups = await bridge.call('duplicates');
-  ui.plan = await bridge.call('renamePlan');
-  ui.planOn = new Set();
+  const previous = new Map((ui.plan || []).map(p => [p.id, renameSignature(p)]));
+  const next = await bridge.call('renamePlan');
+  const unchanged = new Set(next.filter(p => previous.get(p.id) === renameSignature(p)).map(p => p.id));
+  ui.planOn = new Set([...(ui.planOn || [])].filter(id => unchanged.has(id)));
+  ui.planOff = new Set([...(ui.planOff || [])].filter(id => unchanged.has(id)));
+  ui.plan = next;
   if (ui.screen === 'disks') render();
   if (ui.screen === 'disks' && ui.diskTab === 'orphans') loadOrphans();
 }
