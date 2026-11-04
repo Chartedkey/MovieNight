@@ -181,25 +181,72 @@ async function pickAndAdd(role) {
   await doState('addFolder', p, role);
   if (role !== 'exclude') runScan(p);
 }
+function orphanNeedsLoad(e) {
+  if (ui.orphanErrors && ui.orphanErrors[e.id]) return false;
+  const found = ui.orphanSearch[e.id];
+  return !found || found.some((c) => !ui.candInfo[c.id]);
+}
+function nextOrphanToLoad() {
+  if (ui.screen !== 'disks' || ui.diskTab !== 'orphans') return null;
+  return allEntries().filter((e) => e.state === 'orphan').slice(0, ui.orphanShown)
+    .find((e) => !e.candidates && orphanNeedsLoad(e));
+}
 async function loadOrphans() {
-  if (ui.orphanLoading) return;
+  if (ui.orphanLoading || !nextOrphanToLoad()) return;
   ui.orphanLoading = true;
-  const list = allEntries().filter((e) => e.state === 'orphan' && !e.candidates).slice(0, ui.orphanShown);
+  ui.orphanErrors = ui.orphanErrors || {};
   try {
-    for (const e of list) {
-      if (ui.orphanSearch[e.id]) continue;
-      const q = `${e.title}${e.year ? ` (${e.year})` : ''}`;
-      const r = await bridge.call('searchForReview', q);
-      ui.orphanSearch[e.id] = r.cands;
-      const ids = r.cands.map((c) => c.id).filter((id) => !ui.candInfo[id]);
-      if (ids.length) Object.assign(ui.candInfo, await bridge.call('candidateInfo', ids));
+    let e;
+    // Re-read visible cards: resolving a film reveals new rows while requests are running.
+    while ((e = nextOrphanToLoad())) {
+      try {
+        if (!ui.orphanSearch[e.id]) {
+          const q = ui.orphanQ[e.id] || `${e.title}${e.year ? ` (${e.year})` : ''}`;
+          const r = await bridge.call('searchForReview', q);
+          ui.orphanSearch[e.id] = r.cands;
+        }
+        const ids = ui.orphanSearch[e.id].map((c) => c.id).filter((id) => !ui.candInfo[id]);
+        if (ids.length) {
+          const info = await bridge.call('candidateInfo', ids);
+          Object.assign(ui.candInfo, info);
+          if (ids.some((id) => !ui.candInfo[id])) throw new Error('Не удалось загрузить сведения о некоторых вариантах.');
+        }
+      } catch (err) {
+        ui.orphanErrors[e.id] = 'Не удалось загрузить варианты или сведения TMDB. Можно повторить загрузку.';
+      }
       if (ui.screen === 'disks') render();
     }
-  } catch (err) {
-    say('TMDB не ответил, варианты загрузятся позже.');
+  } finally {
+    ui.orphanLoading = false;
+    if (ui.screen === 'disks') render();
   }
-  ui.orphanLoading = false;
 }
+async function searchOrphan(e) {
+  delete ui.orphanSearch[e.id];
+  ui.orphanErrors = ui.orphanErrors || {};
+  delete ui.orphanErrors[e.id];
+  try {
+    const r = await bridge.call('searchForReview', ui.orphanQ[e.id] || e.title);
+    ui.orphanSearch[e.id] = r.cands;
+    const ids = r.cands.map((c) => c.id).filter((id) => !ui.candInfo[id]);
+    if (ids.length) {
+      Object.assign(ui.candInfo, await bridge.call('candidateInfo', ids));
+      if (ids.some((id) => !ui.candInfo[id])) throw new Error('Incomplete candidate details');
+    }
+  } catch (err) {
+    ui.orphanErrors[e.id] = 'Не удалось загрузить варианты или сведения TMDB. Можно повторить загрузку.';
+  }
+  render();
+}
+
+function retryOrphan(id) {
+  const e = allEntries().find((x) => x.id === id);
+  if (e && e.candidates) return searchOrphan(e);
+  if (ui.orphanErrors) delete ui.orphanErrors[id];
+  render();
+  return loadOrphans();
+}
+
 function directorQueue(tmdbId) {
   const f = ui.state.films[`m${tmdbId}`];
   const info = ui.candInfo[tmdbId];
@@ -232,11 +279,22 @@ async function applyQueueAdd(tmdbId, entryId, options = {}) {
   render();
 }
 
+function knownFilmTag(f) {
+  if (!f) return '';
+  const labels = { queue: 'Уже в очереди', reserve: 'В запасе', disk: 'Только учтён на диске', watched: 'Уже просмотрен', dropped: 'Брошен', notfound: 'Отмечен как «Не нашёл»', nointerest: 'Не интересует', candidate: 'Уже есть в фильмографии' };
+  return `<span class="tag gold">${esc(labels[f.status] || 'Уже в библиотеке')}</span>`;
+}
+
 function orphanCard(e) {
   const mine = (e.candidates || []).map((k) => ui.state.films[k]).filter(Boolean);
   const found = ui.orphanSearch[e.id] || [];
-  const candRow = (c) => { const i = ui.candInfo[c.id]; return `<div class="film choice"><div class="fwrap">${posterHtml(i && i.poster)}<div style="min-width:0"><div class="ftitle">${esc(c.title)}${c.year ? ` (${c.year})` : ''}</div><div class="fmeta">${esc(c.originalTitle || '')}</div><div class="fmeta">${esc(i ? [i.directors.join(', '), i.runtime ? `${i.runtime} мин` : null].filter(Boolean).join(' · ') : '')}</div>${queueContext(c.id)}</div></div><div class="col2"><button class="mini on" data-a="${on(() => requestQueueAdd(c.id, e.id))}">Добавить в очередь</button><button class="mini" title="Запомнить фильм и его файлы без добавления в очередь просмотра" data-a="${on(() => doState('addEntryFilm', e.id, c.id, 'disk'))}">Только учитывать на диске</button><button class="mini" data-a="${on(() => doState('addEntryFilm', e.id, c.id, true))}">Уже смотрел</button></div></div>`; };
-  return `<section class="card"><div><h2>${esc(e.title)}${e.year ? ` (${e.year})` : ''}</h2><div class="path">${esc(e.path)}</div><div class="sub">${kindName[e.kind] || ''} · ${gb(e.size)}${e.duration ? ` · ${e.duration} мин` : ''}</div></div>${mine.length ? `<div class="sub warn">Совпало с несколькими фильмами списка:</div>${mine.map((f) => `<div class="film"><div class="fwrap">${posterHtml(f.poster)}<div class="ftitle">${filmLine(f)}<div class="fmeta">${esc((ui.state.directors[f.dir] || {}).name || '')}${f.runtime ? ` · ${f.runtime} мин` : ''}</div></div></div><button class="mini on" data-a="${on(() => doState('chooseEntryFilm', e.id, f.key))}">Это он</button></div>`).join('')}` : ''}<div class="list">${found.map(candRow).join('') || (mine.length ? '' : '<div class="sub">Ищу варианты…</div>')}</div><div class="row"><input class="field" id="orp${esc(e.id)}" data-orpq="${esc(e.id)}" aria-label="Поиск в TMDB" placeholder="Название, режиссёр или ссылка TMDB" value="${esc(ui.orphanQ[e.id] || '')}"><button class="btn" data-a="${on(async () => { const r = await call('searchForReview', ui.orphanQ[e.id] || e.title); ui.orphanSearch[e.id] = r.cands; Object.assign(ui.candInfo, await call('candidateInfo', r.cands.map((c) => c.id))); render(); })}">Найти</button><button class="btn ghost" data-a="${on(() => call('openEntry', e.id))}">Открыть папку</button><button class="btn ghost" data-a="${on(() => ignoreFile(e.id))}">Игнорировать</button></div></section>`;
+  const candRow = (c) => {
+    const i = ui.candInfo[c.id];
+    const known = ui.state.films[`m${c.id}`];
+    const canQueue = !known || ['disk', 'reserve', 'candidate'].includes(known.status);
+    return `<div class="film choice"><div class="fwrap">${posterHtml(i && i.poster)}<div style="min-width:0"><div class="ftitle">${esc(c.title)}${c.year ? ` (${c.year})` : ''}</div>${knownFilmTag(known)}<div class="fmeta">${esc(c.originalTitle || '')}</div><div class="fmeta">${esc(i ? [i.directors.join(', '), i.runtime ? `${i.runtime} мин` : null].filter(Boolean).join(' · ') : '')}</div>${queueContext(c.id)}</div></div><div class="col2">${known ? `<button class="mini on" data-a="${on(() => doState('chooseEntryFilm', e.id, known.key))}">Это он — связать файл</button>` : ''}${canQueue ? `<button class="mini on" data-a="${on(() => requestQueueAdd(c.id, e.id))}">Добавить в очередь</button>` : ''}${!known ? `<button class="mini" title="Запомнить фильм и его файлы без добавления в очередь просмотра" data-a="${on(() => doState('addEntryFilm', e.id, c.id, 'disk'))}">Только учитывать на диске</button>` : ''}${!known || !['watched', 'dropped'].includes(known.status) ? `<button class="mini" data-a="${on(() => doState('addEntryFilm', e.id, c.id, true))}">Уже смотрел</button>` : ''}</div></div>`;
+  };
+  return `<section class="card"><div><h2>${esc(e.title)}${e.year ? ` (${e.year})` : ''}</h2><div class="path">${esc(e.path)}</div><div class="sub">${kindName[e.kind] || ''} · ${gb(e.size)}${e.duration ? ` · ${e.duration} мин` : ''}</div></div>${mine.length ? `<div class="sub warn">Совпало с несколькими фильмами списка:</div>${mine.map((f) => `<div class="film"><div class="fwrap">${posterHtml(f.poster)}<div class="ftitle">${filmLine(f)}${knownFilmTag(f)}<div class="fmeta">${esc((ui.state.directors[f.dir] || {}).name || '')}${f.runtime ? ` · ${f.runtime} мин` : ''}</div></div></div><button class="mini on" data-a="${on(() => doState('chooseEntryFilm', e.id, f.key))}">Это он</button></div>`).join('')}` : ''}<div class="list">${found.map(candRow).join('') || (mine.length ? '' : `<div class="sub">${ui.orphanErrors && ui.orphanErrors[e.id] ? 'Загрузка не завершена.' : ui.orphanSearch[e.id] ? 'Вариантов не найдено. Попробуй другое название или ссылку TMDB.' : 'Ищу варианты…'}</div>`)}</div>${ui.orphanErrors && ui.orphanErrors[e.id] ? `<div class="sub warn">${esc(ui.orphanErrors[e.id])}</div><button class="mini" data-a="${on(() => retryOrphan(e.id))}">Повторить загрузку</button>` : ''}<div class="row"><input class="field" id="orp${esc(e.id)}" data-orpq="${esc(e.id)}" aria-label="Поиск в TMDB" placeholder="Название, режиссёр или ссылка TMDB" value="${esc(ui.orphanQ[e.id] || '')}"><button class="btn" data-a="${on(async () => { await searchOrphan(e); })}">Найти</button><button class="btn ghost" data-a="${on(() => call('openEntry', e.id))}">Открыть папку</button><button class="btn ghost" data-a="${on(() => ignoreFile(e.id))}">Игнорировать</button></div></section>`;
 }
 async function restoreIgnored(id) {
   await doState('unignoreEntry', id);
@@ -476,6 +534,7 @@ function renderInner() {
   if (shadeAfter && shadeBefore) shadeAfter.scrollTop = shadeTop;
   window.scrollTo(0, pageTop);
   if (focus) { const el = document.getElementById(focus); if (el) { el.focus(); try { el.setSelectionRange(caret, caret); } catch (e) { /* поле без курсора */ } } }
+  if (!gate && ui.screen === 'disks' && ui.diskTab === 'orphans') loadOrphans();
 }
 
 // Постер не загрузился: показываем заглушку, а не значок сломанной картинки.

@@ -9,11 +9,33 @@ class TmdbError extends Error {
   }
 }
 
-function createTmdb({ key, fetchImpl, language = 'ru-RU', minGapMs = 60, sleep }) {
+function createTmdb({ key, fetchImpl, language = 'ru-RU', minGapMs = 60, sleep, requestTimeoutMs = 20000 }) {
   const doFetch = fetchImpl || fetch;
   const wait = sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
   const bearer = /^eyJ/.test(key);
   let last = 0;
+
+  async function fetchResponse(url, options) {
+    const controller = new AbortController();
+    let timer;
+    try {
+      return await Promise.race([
+        (async () => {
+          const res = await doFetch(url, { ...options, signal: controller.signal });
+          const data = res.ok ? await res.json() : null;
+          return { res, data };
+        })(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error('TMDB request timed out'));
+            controller.abort();
+          }, requestTimeoutMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   async function get(path, params = {}, attempt = 0) {
     const gap = last + minGapMs - Date.now();
@@ -22,11 +44,11 @@ function createTmdb({ key, fetchImpl, language = 'ru-RU', minGapMs = 60, sleep }
     const url = new URL(BASE + path);
     Object.entries({ language, ...params }).forEach(([k, v]) => url.searchParams.set(k, String(v)));
     if (!bearer) url.searchParams.set('api_key', key);
-    let res;
+    let res, data;
     try {
-      res = await doFetch(url.toString(), {
+      ({ res, data } = await fetchResponse(url.toString(), {
         headers: { Accept: 'application/json', ...(bearer ? { Authorization: `Bearer ${key}` } : {}) },
-      });
+      }));
     } catch (e) {
       if (attempt < 3) {
         await wait(1000 * (attempt + 1));
@@ -41,7 +63,7 @@ function createTmdb({ key, fetchImpl, language = 'ru-RU', minGapMs = 60, sleep }
     }
     if (res.status === 404) throw new TmdbError('missing', 'В TMDB нет такой записи.');
     if (!res.ok) throw new TmdbError('http', `TMDB ответил ошибкой ${res.status}.`);
-    return res.json();
+    return data;
   }
 
   return {

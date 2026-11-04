@@ -234,3 +234,21 @@ test('оценки при разметке сохраняются без выд�
   assert.equal(new Service({ dir: s.dir }).state.films.m1.rating, null);
   assert.equal(restored.state.films.m1.status, 'watched');
 });
+
+test('TMDB: зависший запрос или чтение ответа завершаются по тайм-ауту, следующий запрос работает', async () => {
+  for (const stuckBody of [false, true]) {
+    let stuck = true, aborted = 0;
+    const client = createTmdb({ key: 'test', minGapMs: 0, sleep: async () => {}, requestTimeoutMs: 5,
+      fetchImpl: async (_url, options) => {
+        if (!stuck) return { ok: true, status: 200, json: async () => ({ recovered: true }) };
+        options.signal.addEventListener('abort', () => { aborted++; });
+        if (stuckBody) return { ok: true, status: 200, json: () => new Promise(() => {}) };
+        return new Promise(() => {});
+      },
+    });
+    await assert.rejects(client.ping(), (e) => e.kind === 'network');
+    assert.equal(aborted, 4);
+    stuck = false;
+    assert.deepEqual(await client.ping(), { recovered: true });
+  }
+});

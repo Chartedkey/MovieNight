@@ -382,3 +382,106 @@ test('старые связи неизвестного происхождени�
   s.state.files.x.year=1992;
   assert.equal(s.renamePlan()[0].requiresConfirmation,true);
 });
+
+// Exercise the renderer's real loader without a real TMDB key or an Electron window.
+function orphanRenderer(invoke) {
+  const vm = require('node:vm');
+  const context = vm.createContext({
+    console, setTimeout, clearTimeout,
+    document: { getElementById: () => ({}), querySelector: () => null, addEventListener() {} },
+    window: { scrollTo() {}, addEventListener() {}, api: {
+      call: (method, ...args) => method === 'version' ? new Promise(() => {}) : invoke(method, ...args),
+      onProgress() {}, onScan() {}, onUpdate() {},
+    } },
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../renderer/app.js'), 'utf8'), context);
+  vm.runInContext(`globalThis.actualRender = render; render = () => {}; ui.screen = 'disks'; ui.diskTab = 'orphans';
+    ui.state = { files: {}, films: {}, directors: {} }; ui.orphanShown = 1;`, context);
+  return { run: (code) => vm.runInContext(code, context) };
+}
+
+test('разбор: новые видимые карточки загружаются после удаления верхней во время запроса', async () => {
+  let renderer;
+  const queries = [];
+  renderer = orphanRenderer(async (method, query) => {
+    if (method === 'searchForReview') {
+      queries.push(query);
+      if (query === 'Первый') renderer.run("ui.state.files.a.state = 'linked'");
+      return { cands: [{ id: queries.length }] };
+    }
+    return { [query[0]]: { poster: '/poster.jpg' } };
+  });
+  renderer.run("ui.state.files = { a: { id:'a', title:'Первый', state:'orphan' }, b: { id:'b', title:'Второй', state:'orphan' } }");
+  await renderer.run('loadOrphans()');
+  assert.deepEqual(queries, ['Первый', 'Второй']);
+  assert.equal(renderer.run('ui.candInfo[2].poster'), '/poster.jpg');
+  await renderer.run('loadOrphans()');
+  assert.equal(queries.length, 2, 'готовые результаты не запрашиваются бесконечно');
+});
+
+test('разбор: сбой сведений не блокирует следующие карточки и повтор не теряет сохранённый поиск', async () => {
+  let fail = true, searches = 0;
+  const renderer = orphanRenderer(async (method, arg) => {
+    if (method === 'searchForReview') { searches++; return { cands: [{ id: arg === 'Первый' ? 1 : 2 }] }; }
+    if (arg[0] === 1 && fail) throw new Error('temporary outage');
+    return { [arg[0]]: { poster: '/poster.jpg' } };
+  });
+  renderer.run("ui.orphanShown=2;ui.state.files={ a:{id:'a',title:'Первый',state:'orphan'}, b:{id:'b',title:'Второй',state:'orphan'} }");
+  await renderer.run('loadOrphans()');
+  assert.equal(renderer.run('!!ui.orphanErrors.a'), true);
+  assert.equal(renderer.run('!!ui.candInfo[2]'), true);
+  assert.equal(renderer.run('ui.orphanLoading'), false);
+  assert.match(renderer.run("orphanCard(ui.state.files.a)"), /Повторить загрузку/);
+  fail=false;
+  await renderer.run("retryOrphan('a')");
+  assert.equal(renderer.run('!!ui.candInfo[1]'), true);
+  assert.equal(searches, 2, 'повторно загружаются сведения, а не уже успешный поиск');
+});
+
+test('разбор: отсутствие результатов отличается от незавершённой загрузки', async () => {
+  const renderer = orphanRenderer(async () => ({ cands: [] }));
+  renderer.run("ui.state.files={a:{id:'a',title:'Первый',state:'orphan'}}");
+  await renderer.run('loadOrphans()');
+  assert.match(renderer.run('orphanCard(ui.state.files.a)'), /Вариантов не найдено/);
+  assert.equal(renderer.run('ui.orphanLoading'), false);
+});
+
+test('разбор: перерисовка после завершённой загрузки подхватывает следующую карточку', async () => {
+  const searched=[];
+  const renderer=orphanRenderer(async (method,arg) => {
+    if(method==='searchForReview'){searched.push(arg); return {cands:[]};}
+    return {};
+  });
+  renderer.run("ui.hasKey=true;ui.state.folders=[];ui.state.near=[];ui.state.films={m1:{key:'m1',dir:1,status:'queue'}};ui.state.files={a:{id:'a',title:'Первый',state:'orphan'},b:{id:'b',title:'Второй',state:'orphan'}}");
+  await renderer.run('loadOrphans()');
+  assert.deepEqual(searched,['Первый']);
+  renderer.run("ui.state.files.a.state='linked';actualRender()");
+  await new Promise((resolve)=>setImmediate(resolve));
+  assert.deepEqual(searched,['Первый','Второй']);
+});
+
+test('разбор: у фильма из очереди показаны статус и привязка вместо повторного добавления', async () => {
+  const calls=[];
+  const renderer=orphanRenderer(async (...args)=>{calls.push(args);return {films:{},files:{},directors:{}};});
+  renderer.run("ui.state.films.m1={key:'m1',dir:9,status:'queue',userTitle:'Белый, белый день'};ui.orphanSearch.x=[{id:1,title:'Белый, белый день',year:2019}];ui.candInfo[1]={directors:['Режиссёр'],runtime:109};");
+  const html=renderer.run("orphanCard({id:'x',title:'Файл',kind:'file'})");
+  assert.match(html,/Уже в очереди/);
+  assert.doesNotMatch(html,/>Добавить в очередь</);
+  const button=html.match(/data-a="([^"]+)"[^>]*>Это он — связать файл/);
+  assert.ok(button);
+  await renderer.run(`actions['${button[1]}']()`);
+  assert.deepEqual(calls,[['chooseEntryFilm','x','m1']]);
+});
+
+test('связь нового файла сохраняет статус, очередь, оценки и историю известного фильма', () => {
+  for(const status of ['queue','reserve','disk','watched','dropped']) {
+    const s=svc({m1:film(1,'Белый, белый день',2019,{status,rating:8,queueChosen:true,watched:[{date:'2026-11-01',result:'watched'}]})});
+    s.state.files={x:{id:'x',title:'Другое имя',year:2019,state:'orphan'}};
+    const before=JSON.stringify(s.state.films.m1);
+    s.chooseEntryFilm('x','m1');
+    const after={...s.state.films.m1}; delete after.moveTask;
+    assert.equal(JSON.stringify(after),before);
+    assert.equal(s.state.files.x.filmKey,'m1');
+    assert.equal(s.state.files.x.matchMethod,'manual');
+  }
+});
