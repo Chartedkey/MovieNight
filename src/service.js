@@ -597,7 +597,14 @@ class Service {
     return f;
   }
 
-  rate(key, rating) { this.mustFilm(key).rating = rating; this.save(); return this.state; }
+  rate(key, rating) {
+    if (rating !== null && (!Number.isInteger(rating) || rating < 1 || rating > 10)) {
+      throw new Error('Оценка должна быть целым числом от 1 до 10.');
+    }
+    this.mustFilm(key).rating = rating;
+    this.save();
+    return this.state;
+  }
   toggleRewatch(key) { const f = this.mustFilm(key); f.rewatch = !f.rewatch; this.save(); return this.state; }
   finishReview(key) { this.mustFilm(key).pending = false; this.save(); return this.state; }
   setTitle(key, title) { this.mustFilm(key).userTitle = String(title || '').trim() || null; this.save(); return this.state; }

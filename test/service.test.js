@@ -212,3 +212,25 @@ test('клиент TMDB: ключ и токен, ошибка ключа и по
   assert.deepEqual(await limited.ping(), { a: 1 });
   assert.equal(tries, 3);
 });
+
+test('оценки при разметке сохраняются без выдуманной даты просмотра и утренней задачи', async () => {
+  const s = await imported();
+  s.markFilm('m1', 'watched');
+  assert.equal(s.state.films.m1.pending, false);
+  assert.deepEqual(s.state.films.m1.watched, []);
+  s.rate('m1', 7);
+  const restored = new Service({ dir: s.dir });
+  assert.equal(restored.state.films.m1.rating, 7);
+  assert.equal(restored.state.films.m1.status, 'watched');
+  assert.deepEqual(restored.state.films.m1.watched, []);
+  assert.equal(restored.state.films.m1.pending, false);
+  restored.rate('m1', 9);
+  assert.equal(restored.state.films.m1.rating, 9);
+  for (const rating of [0, 11, 6.5, '7', NaN, undefined]) {
+    assert.throws(() => restored.rate('m1', rating), /от 1 до 10/);
+    assert.equal(restored.state.films.m1.rating, 9);
+  }
+  restored.rate('m1', null);
+  assert.equal(new Service({ dir: s.dir }).state.films.m1.rating, null);
+  assert.equal(restored.state.films.m1.status, 'watched');
+});

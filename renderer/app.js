@@ -304,6 +304,11 @@ async function openNext(id) {
   try { await call('filmography', id); await refresh(); ui.modal = { type: 'next', dir: id, chosen: [], sort: 'pop' }; render(); } catch (e) { ui.modal = null; render(); }
 }
 
+function markupRating(f) {
+  if (!['watched', 'dropped'].includes(f.status)) return '';
+  return `<label class="row" style="gap:6px"><span class="sub">Твоя оценка</span><select class="field" style="width:auto" id="rating-${f.key}" data-rating="${f.key}" aria-label="Оценка фильма ${esc(titleOf(f))}"><option value="" ${f.rating == null ? 'selected' : ''}>Без оценки</option>${Array.from({ length: 10 }, (_, i) => i + 1).map((n) => `<option value="${n}" ${f.rating === n ? 'selected' : ''}>${n} / 10</option>`).join('')}</select></label>`;
+}
+
 function modal() {
   const m = ui.modal;
   if (!m) return '';
@@ -316,9 +321,9 @@ function modal() {
     title = `Разметка: ${d.name}`;
     const fs = Object.values(ui.state.films).filter((f) => f.dir === m.dir).sort((a, b) => (a.year || 9999) - (b.year || 9999));
     const marks = [['Смотрел', 'watched', false], ['Не смотрел', 'candidate', false], ['Хочу', 'candidate', true], ['Не интересно', 'nointerest', false]];
-    body = `<div class="sub">Только полнометражные режиссёрские работы, с начала карьеры. Разметить нужно один раз.</div><div class="list">${fs.map((f) => {
+    body = `<div class="sub">Только полнометражные режиссёрские работы, с начала карьеры. Разметить нужно один раз. У просмотренных фильмов можно поставить необязательную оценку от 1 до 10 — даже если смотрел их давно.</div><div class="list">${fs.map((f) => {
       const cur = f.status === 'queue' || f.status === 'reserve' ? 'queue' : f.status;
-      return `<div class="film"><div class="fwrap">${posterHtml(f.poster)}<div><div class="ftitle">${f.year || '—'} · ${esc(titleOf(f))}</div><div class="fmeta">${filmMeta(f)}</div></div></div><div class="row" style="gap:4px">${cur === 'queue' ? '<span class="tag gold">В очереди</span>' : ''}${marks.map((k) => `<button class="mini ${cur === k[1] && !!f.wish === k[2] ? 'on' : ''}" data-a="${on(() => doState('markFilm', f.key, k[1], k[2]))}">${k[0]}</button>`).join('')}</div></div>`;
+      return `<div class="film"><div class="fwrap">${posterHtml(f.poster)}<div><div class="ftitle">${f.year || '—'} · ${esc(titleOf(f))}</div><div class="fmeta">${filmMeta(f)}</div></div></div><div class="row" style="gap:4px">${cur === 'queue' ? '<span class="tag gold">В очереди</span>' : ''}${marks.map((k) => `<button class="mini ${cur === k[1] && !!f.wish === k[2] ? 'on' : ''}" data-a="${on(() => doState('markFilm', f.key, k[1], k[2]))}">${k[0]}</button>`).join('')}${markupRating(f)}</div></div>`;
     }).join('')}</div><button class="btn primary" data-a="${on(async () => { await doState('finishMarkup', m.dir); if (ui.state.directors[m.dir].needsChoice) openNext(m.dir); else { ui.modal = null; render(); } })}">Готово</button>`;
   }
   if (m.type === 'next') {
@@ -421,6 +426,10 @@ function openMenu(key, e) {
 document.addEventListener('contextmenu', (e) => {
   const f = e.target.closest('[data-film]');
   if (f) openMenu(f.dataset.film, e);
+});
+document.addEventListener('change', (e) => {
+  const key = e.target.dataset.rating;
+  if (key) doState('rate', key, e.target.value === '' ? null : Number(e.target.value)).catch(() => {});
 });
 document.addEventListener('input', (e) => {
   if (e.target.id === 'libq') { ui.q = e.target.value; ui.shown = 40; render(); }
