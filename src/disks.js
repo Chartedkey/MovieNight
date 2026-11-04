@@ -4,6 +4,7 @@ const path = require('path');
 const { scanFolder } = require('./scanner');
 const { probeEntry } = require('./probe');
 const { norm } = require('./matcher');
+const { renameTitle } = require('./filenames');
 
 const LOST_MIN = 10;
 const LOST_SHARE = 0.5;
@@ -235,7 +236,7 @@ const diskMethods = {
     if (!this.entries()[id]) throw new Error('Файл не найден.');
     const watched = mode === 'watched';
     const det = await this.detail(tmdbId);
-    const f = this.ensureFilm(det, { userTitle: this.entries()[id].title, status: mode === 'queue' ? 'disk' : mode });
+    const f = this.ensureFilm(det, { userTitle: this.entries()[id].title, titleSource: 'disk', status: mode === 'queue' ? 'disk' : mode });
     if (mode === 'queue' && ['candidate', 'disk', 'reserve'].includes(f.status)) this.enqueueFilm(f, options);
     if (watched) f.status = 'watched';
     if (watched) { f.pending = true; f.watched.push({ date: new Date().toISOString().slice(0, 10), result: 'watched' }); }
@@ -290,17 +291,16 @@ const diskMethods = {
       if (e.state !== 'linked' || e.role === 'exclude') return;
       const f = this.state.films[e.filmKey];
       if (!f || !f.year) return;
-      if (e.year === f.year && new RegExp(`\\\\(${f.year}\\\\)`).test(e.name)) return;
-      const base = (e.title || f.userTitle || '').replace(/[<>:"/\\\\|?*]/g, '').trim();
+      const base = renameTitle(f, e);
       if (!base) return;
       const isFile = e.kind === 'file';
       const ext = isFile ? path.extname(e.path) : '';
       const to = `${base} (${f.year})${ext}`;
       if (to !== path.basename(e.path)) plan.push({
-        id: e.id, from: path.basename(e.path), to, dir: path.dirname(e.path), filmKey: f.key,
+        id: e.id, from: path.basename(e.path), to, dir: path.dirname(e.path), filmKey: f.key, title: base,
         matchMethod: e.matchMethod || 'unknown', fileYear: e.year || null, filmYear: f.year,
         duration: e.duration || null,
-        requiresConfirmation: !e.year || e.year !== f.year || !e.matchMethod || ['name', 'duration', 'moved'].includes(e.matchMethod),
+        requiresConfirmation: base !== e.title || !e.year || e.year !== f.year || !e.matchMethod || ['name', 'duration', 'moved'].includes(e.matchMethod),
       });
     });
     return plan;

@@ -159,14 +159,31 @@ function download() {
 const kpSearch = (f) => `https://www.kinopoisk.ru/index.php?kp_query=${encodeURIComponent(`${f.originalTitle || titleOf(f)} ${f.year || ''}`)}`;
 
 async function runScan(only) {
+  if (ui.scan) return false;
   ui.scan = { running: true, current: 'Начинаю сканирование', found: 0 }; render();
-  try { await bridge.call('scanAll', only); } catch (e) { say(String(e.message || e)); }
-  ui.state = await bridge.call('getState');
-  ui.scan = null;
-  await loadDiskExtras();
-  render();
-  const s = ui.state.scan;
-  if (s && s.offline && s.offline.length) say(`Недоступна папка: ${s.offline[0]}`);
+  try {
+    await bridge.call('scanAll', only);
+    ui.state = await bridge.call('getState');
+    await loadDiskExtras();
+    const s = ui.state.scan;
+    if (s && s.offline && s.offline.length) say(`Недоступна папка: ${s.offline[0]}`);
+    return true;
+  } catch (e) {
+    say(String(e.message || e));
+    return false;
+  } finally {
+    ui.scan = null;
+    render();
+  }
+}
+async function verifyDuplicates() {
+  if (!await runScan()) return;
+  const scan = ui.state.scan || {};
+  if ((scan.offline || []).length || (scan.errors || []).length || Object.keys(ui.state.lost || {}).length) {
+    say('Проверка неполная: часть папок недоступна или требует проверки. Посмотри раздел «Папки».');
+  } else {
+    say(ui.dups.length ? `Проверено. Фильмов с дублями осталось: ${ui.dups.length}.` : 'Проверено: дублей не осталось.');
+  }
 }
 async function loadDiskExtras() {
   ui.dups = await bridge.call('duplicates');
@@ -312,7 +329,7 @@ function renameCard(p) {
   const f = ui.state.films[p.filmKey] || {};
   const reasons = { manual: 'Ты подтвердил фильм вручную', memory: 'Сохранённая связь по названию и году', name: 'Только по совпадению названия в библиотеке', 'name-year': 'По совпадению названия и года', 'name-near-year': 'По названию и году с расхождением в один год', duration: 'По названию и близкой длительности', moved: 'По прежней связи при перемещении', unknown: 'Связь из прежней версии: способ сопоставления не сохранён' };
   const selected = renameSelected(p);
-  return `<section class="card"><div class="fmeta">${esc(p.from)} → <strong>${esc(p.to)}</strong></div><div class="path">${esc(p.dir)}</div><div class="fwrap" style="margin-top:10px">${posterHtml(f.poster)}<div><div class="ftitle">${filmLine(f)}</div><div class="sub">${esc((ui.state.directors[f.dir] || {}).name || 'Режиссёр не указан')}</div><div class="sub">Длительность файла: ${p.duration ? `${p.duration} мин` : 'неизвестна'} · TMDB: ${f.runtime ? `${f.runtime} мин` : 'неизвестна'}</div><div class="sub">${esc(reasons[p.matchMethod] || reasons.unknown)}</div>${p.requiresConfirmation ? '<div class="sub warn">Проверь фильм и год. Без подтверждения строка не переименовывается.</div>' : ''}</div></div><div class="row"><button class="mini ${selected ? 'on' : ''}" data-a="${on(() => {
+  return `<section class="card"><div class="fmeta">${esc(p.from)} → <strong>${esc(p.to)}</strong></div><div class="path">${esc(p.dir)}</div><div class="fwrap" style="margin-top:10px">${posterHtml(f.poster)}<div><div class="ftitle">${filmLine(p.title ? { ...f, userTitle: p.title } : f)}</div><div class="sub">${esc((ui.state.directors[f.dir] || {}).name || 'Режиссёр не указан')}</div><div class="sub">Длительность файла: ${p.duration ? `${p.duration} мин` : 'неизвестна'} · TMDB: ${f.runtime ? `${f.runtime} мин` : 'неизвестна'}</div><div class="sub">${esc(reasons[p.matchMethod] || reasons.unknown)}</div>${p.requiresConfirmation ? '<div class="sub warn">Проверь фильм и год. Без подтверждения строка не переименовывается.</div>' : ''}</div></div><div class="row"><button class="mini ${selected ? 'on' : ''}" data-a="${on(() => {
     if (p.requiresConfirmation) { ui.planOn = ui.planOn || new Set(); if (selected) ui.planOn.delete(p.id); else ui.planOn.add(p.id); }
     else { ui.planOff = ui.planOff || new Set(); if (selected) ui.planOff.add(p.id); else ui.planOff.delete(p.id); }
     render();
@@ -344,7 +361,7 @@ function disks() {
     body = `<div class="sub">Фильмы учтены для поиска файлов и дублей, но не добавлены в очередь просмотра. Добавить их можно в любой момент.</div><div class="list">${stored.map((f) => `<section class="card">${filmRow(f, `<button class="mini on" data-a="${on(() => requestQueueAdd(f.tmdbId))}">Добавить в очередь</button>`)}${queueContext(f.tmdbId)}</section>`).join('') || '<div class="card sub">Пока пусто.</div>'}</div>`;
   }
   if (ui.diskTab === 'dups') {
-    body = `<div class="grid wide">${ui.dups.map((d) => { const f = s.films[d.key]; return `<section class="card"><div class="row between"><h2>${filmLine(f)}</h2><span class="tag ${d.identical ? 'bad' : 'gold'}">${d.identical ? 'Вероятно, точная копия' : 'Разный размер'}</span></div>${d.copies.map((c) => `<div class="film"><div><div class="ftitle">${gb(c.size)} · ${kindName[c.kind] || ''}${c.role === 'today' ? ' · в «Сегодня»' : ''}</div><div class="path">${esc(c.path)}</div></div><button class="mini" data-a="${on(() => call('openEntry', c.id))}">Открыть папку</button></div>`).join('')}<div class="row"><button class="mini" data-a="${on(async () => { await doState('duplicateOk', d.key); await loadDiskExtras(); })}">Это разные версии, не напоминать</button></div></section>`; }).join('') || '<div class="card sub">Дублей не найдено.</div>'}</div>`;
+    body = `<section class="card"><div class="row between"><div><h2>Проверка дублей</h2><div class="sub">Убрал лишние копии вручную? Проверь папки повторно — список обновится без перезапуска.</div></div><button class="btn primary" ${ui.scan ? 'disabled' : ''} data-a="${on(verifyDuplicates)}">${ui.scan ? 'Проверяю…' : 'Я разобрал — проверить'}</button></div></section><div class="grid wide">${ui.dups.map((d) => { const f = s.films[d.key]; return `<section class="card"><div class="row between"><h2>${filmLine(f)}</h2><span class="tag ${d.identical ? 'bad' : 'gold'}">${d.identical ? 'Вероятно, точная копия' : 'Разный размер'}</span></div>${d.copies.map((c) => `<div class="film"><div><div class="ftitle">${gb(c.size)} · ${kindName[c.kind] || ''}${c.role === 'today' ? ' · в «Сегодня»' : ''}</div><div class="path">${esc(c.path)}</div></div><button class="mini" data-a="${on(() => call('openEntry', c.id))}">Открыть папку</button></div>`).join('')}<div class="row"><button class="mini" data-a="${on(async () => { await doState('duplicateOk', d.key); await loadDiskExtras(); })}">Это разные версии, не напоминать</button></div></section>`; }).join('') || '<div class="card sub">Дублей не найдено.</div>'}</div>`;
   }
   if (ui.diskTab === 'series') {
     body = `<div class="list">${series.map((e) => `<div class="film"><div><div class="ftitle">${esc(e.name)}</div><div class="path">${esc(e.path)}</div><div class="fmeta">${gb(e.size)}</div></div><div class="row"><button class="mini" data-a="${on(() => doState('entryIsFilm', e.id))}">Это фильм</button>${e.kind === 'series' ? `<button class="mini" data-a="${on(() => doState('excludeSeriesFolder', e.path))}">Исключить папку</button>` : ''}</div></div>`).join('') || '<div class="card sub">Сериалов не найдено.</div>'}</div>`;

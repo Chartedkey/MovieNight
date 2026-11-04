@@ -485,3 +485,81 @@ test('связь нового файла сохраняет статус, оче
     assert.equal(s.state.files.x.matchMethod,'manual');
   }
 });
+
+test('кнопка проверки дублей пересканирует файлы и обновляет карточки без перезапуска', async () => {
+  const r=tmp();
+  big(path.join(r,'Копия А','Фильм (2000).mkv'));
+  big(path.join(r,'Копия Б','Фильм (2000).mkv'));
+  const s=svc({m1:film(1,'Фильм',2000)});
+  s.addFolder(r); await s.scanAll();
+  for(const e of Object.values(s.state.files)) s.chooseEntryFilm(e.id,'m1');
+  assert.equal(s.duplicates().length,1);
+  const renderer=orphanRenderer(async (method,...args)=>s[method](...args));
+  renderer.run(`ui.screen='disks';ui.diskTab='dups';ui.state=${JSON.stringify(s.state)};ui.dups=${JSON.stringify(s.duplicates())};ui.plan=[];`);
+  const html=renderer.run('disks()');
+  const button=html.match(/data-a="([^"]+)"[^>]*>Я разобрал — проверить/);
+  assert.ok(button);
+  fs.rmSync(path.join(r,'Копия Б'),{recursive:true});
+  await renderer.run(`actions['${button[1]}']()`);
+  assert.equal(renderer.run('ui.dups.length'),0);
+  assert.match(renderer.run('ui.toast'),/дублей не осталось/);
+  assert.equal(s.filmEntries('m1').length,1);
+});
+
+test('проверка дублей не объявляет задачу выполненной при недоступной папке', async () => {
+  const r=tmp(); big(path.join(r,'Фильм (2000).mkv'));
+  const s=svc({m1:film(1,'Фильм',2000)});s.addFolder(r);await s.scanAll();
+  fs.renameSync(r,r+'-offline');
+  const renderer=orphanRenderer(async (method,...args)=>s[method](...args));
+  renderer.run(`ui.screen='disks';ui.diskTab='dups';ui.state=${JSON.stringify(s.state)};`);
+  await renderer.run('verifyDuplicates()');
+  assert.match(renderer.run('ui.toast'),/Проверка неполная/);
+  assert.equal(renderer.run('ui.scan'),null);
+});
+
+test('имена релизов: BDRemux и L2 удаляются до разбора года', () => {
+  assert.deepEqual(parseName('Дорога к дому (Jibeuro) (2002) BDRemux.mkv',true),{title:'Дорога к дому (Jibeuro)',year:2002});
+  assert.deepEqual(parseName('Silenced.2011.L2.BDRip.720p.Goliaf.mkv',true),{title:'Silenced',year:2011});
+});
+
+test('переименование использует связанный русский фильм, а не техническое имя релиза', async () => {
+  const examples=[
+    {name:'Дорога к дому (Jibeuro) (2002) BDRemux.mkv', oldTitle:'Дорога к дому (Jibeuro) (2002) BDRemux', title:'Дорога к дому',year:2002},
+    {name:'Silenced.2011.L2.BDRip.720p.Goliaf.mkv',oldTitle:'Silenced 2011 L2',title:'Суровое испытание',year:2011},
+  ];
+  for(const ex of examples){
+    const r=tmp();big(path.join(r,ex.name));
+    const s=svc({m1:film(1,ex.oldTitle,ex.year,{tmdbTitle:ex.title})});
+    s.addFolder(r);await s.scanAll();
+    const id=Object.keys(s.state.files)[0];s.chooseEntryFilm(id,'m1');
+    // Reproduce records saved by the previous scanner, without erasing the user's data.
+    s.state.files[id].title=ex.oldTitle;
+    const p=s.renamePlan()[0];assert.equal(p.to,`${ex.title} (${ex.year}).mkv`);
+    assert.equal(p.title,ex.title);assert.equal(p.requiresConfirmation,true);
+    assert.equal(s.state.films.m1.userTitle,ex.oldTitle,'сохранённое название не переписывается молча');
+    const renamed=await s.applyRename([id],[id]);assert.equal(renamed.failed.length,0);
+    assert.ok(fs.existsSync(path.join(r,`${ex.title} (${ex.year}).mkv`)));
+    assert.equal(s.renamePlan().length,0,'год не добавляется повторно');
+    await s.scanAll();assert.equal(s.renamePlan().length,0);
+  }
+});
+
+test('название из файла не подменяет ручное название и не удаляет числа из названия фильма', () => {
+  const {renameTitle}=require('../src/filenames');
+  assert.equal(renameTitle({userTitle:'Моё название',titleSource:'manual',tmdbTitle:'Другой перевод',year:2002},{title:'BDRemux'}),'Моё название');
+  assert.equal(renameTitle({userTitle:'2001 год: Космическая одиссея',titleSource:'table',year:1968},{title:'Release'}),'2001 год Космическая одиссея');
+  assert.equal(renameTitle({userTitle:'1917',titleSource:'manual',year:2019},{title:'Release'}),'1917');
+  assert.equal(renameTitle({userTitle:'Бегущий по лезвию 2049',titleSource:'manual',year:2017},{title:'Release'}),'Бегущий по лезвию 2049');
+  assert.equal(renameTitle({userTitle:'Дорога к дому (2002) (2002)',titleSource:'manual',year:2002},{title:'Release'}),'Дорога к дому');
+  assert.equal(renameTitle({userTitle:'Дорога к дому (Jibeuro) BDRemux',titleSource:'disk',tmdbTitle:'집으로',year:2002},{title:'Release'}),'Дорога к дому');
+});
+
+test('источник пользовательского названия сохраняется для файлов и явных правок', async () => {
+  const s=svc();s.state.files={x:{id:'x',title:'Новый BDRemux',year:2001,state:'orphan'}};
+  await s.addEntryFilm('x',900,'disk');
+  assert.equal(s.state.films.m900.titleSource,'disk');
+  s.setTitle('m900','Личное название');
+  const restored=new Service({dir:s.dir});
+  assert.equal(restored.state.films.m900.titleSource,'manual');
+  assert.equal(restored.state.films.m900.userTitle,'Личное название');
+});

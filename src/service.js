@@ -475,7 +475,7 @@ class Service {
     const films = this.state.films;
     if (!films[key]) {
       films[key] = {
-        key, tmdbId: d.id, userTitle: extra.userTitle || null, tmdbTitle: d.title || d.displayTitle || null,
+        key, tmdbId: d.id, userTitle: extra.userTitle || null, titleSource: extra.userTitle ? (extra.titleSource || 'table') : null, tmdbTitle: d.title || d.displayTitle || null,
         originalTitle: d.originalTitle, year: d.year, runtime: d.runtime, countries: d.countries, genres: d.genres,
         altTitles: d.altTitles || [], overview: d.overview, poster: d.poster, popularity: d.popularity, voteAverage: d.voteAverage, voteCount: d.voteCount,
         directorIds: d.directors.map((x) => x.id), dir: extra.dir ?? (d.directors[0] ? d.directors[0].id : null),
@@ -483,7 +483,10 @@ class Service {
       };
     }
     if (extra.link && !films[key].kpLink) films[key].kpLink = extra.link;
-    if (extra.userTitle && !films[key].userTitle) films[key].userTitle = extra.userTitle;
+    if (extra.userTitle && !films[key].userTitle) {
+      films[key].userTitle = extra.userTitle;
+      films[key].titleSource = extra.titleSource || 'table';
+    }
     d.directors.forEach((x) => this.ensureDirector(x));
     return films[key];
   }
@@ -630,7 +633,7 @@ class Service {
   }
   toggleRewatch(key) { const f = this.mustFilm(key); f.rewatch = !f.rewatch; this.save(); return this.state; }
   finishReview(key) { this.mustFilm(key).pending = false; this.save(); return this.state; }
-  setTitle(key, title) { this.mustFilm(key).userTitle = String(title || '').trim() || null; this.save(); return this.state; }
+  setTitle(key, title) { const f = this.mustFilm(key); f.userTitle = String(title || '').trim() || null; f.titleSource = f.userTitle ? 'manual' : null; this.save(); return this.state; }
   toggleFav(id) { const d = this.state.directors[id]; d.fav = !d.fav; this.save(); return this.state; }
   ban(id) { const d = this.state.directors[id]; d.banned = true; d.needsChoice = false; this.save(); return this.state; }
 

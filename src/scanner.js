@@ -10,7 +10,7 @@ const BONUS_FILE = /(^|[\s._\-[(])(sample|trailer|featurette|трейлер|се
 const EPISODE = /(?:^|[\s._\-[(])(?:s\d{1,2}[\s._-]?e\d{1,3}|\d{1,2}x\d{2,3}|сезон[\s._-]*\d+|серия[\s._-]*\d+|\d+[\s._-]*(?:серия|сезон)|season[\s._-]*\d+|episode[\s._-]*\d+)/i;
 const SEASON_DIR = /^(сезон|season|s)[\s._-]*\d+$|^\d+[\s._-]*сезон$/i;
 const PART = /(?:^|[\s._\-[(])(?:cd|dvd|disc|disk|part|pt|часть|диск)[\s._-]*(\d)(?:[\s._\-\])]|$)/i;
-const TAGS = /[\s._\-[(]+(?:\d{3,4}p|bdrip|brrip|dvdrip|webrip|web-dl|hdrip|hdtv|bluray|blu-ray|remux|x26[45]|h\.?26[45]|hevc|xvid|divx|ac3|dts|aac|rus|eng|dub|mvo|avo|криттерион|criterion|director'?s cut|режисс[её]рская).*$/i;
+const TAGS = /[\s._\-[(]+(?:\d{3,4}p|bdremux|l[1-9](?=[\s._\-\])]|$)|bdrip|brrip|dvdrip|webrip|web-dl|hdrip|hdtv|bluray|blu-ray|remux|x26[45]|h\.?26[45]|hevc|xvid|divx|ac3|dts|aac|rus|eng|dub|mvo|avo|криттерион|criterion|director'?s cut|режисс[её]рская).*$/i;
 const MIN_FILM_BYTES = 100 * 1024 * 1024;
 
 function parseName(raw, isFile) {
