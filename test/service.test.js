@@ -252,3 +252,45 @@ test('TMDB: зависший запрос или чтение ответа за�
     assert.deepEqual(await client.ping(), { recovered: true });
   }
 });
+
+test('личное имя режиссёра сохраняет варианты поиска и данные после перезапуска', async () => {
+  const s = await imported();
+  const before = JSON.stringify({films:s.state.films,near:s.state.near});
+  s.state.directors[10].name = '贾樟柯';
+  delete s.state.directors[10].tmdbName;
+  s.setDirectorName(10, 'Цзя Чжанкэ');
+  s.ensureDirector({id:10,name:'Jia Zhangke'});
+  assert.equal(s.state.directors[10].name, 'Цзя Чжанкэ');
+  s.save();
+  const restored = new Service({dir:s.dir});
+  assert.equal(restored.state.directors[10].name, 'Цзя Чжанкэ');
+  assert.ok(restored.state.directors[10].aliases.includes('贾樟柯'));
+  assert.ok(restored.state.directors[10].aliases.includes('Jia Zhangke'));
+  assert.equal(JSON.stringify({films:restored.state.films,near:restored.state.near}), before);
+  restored.setDirectorName(10, '');
+  assert.equal(restored.state.directors[10].name, '贾樟柯');
+  assert.ok(restored.state.directors[10].aliases.includes('Цзя Чжанкэ'));
+});
+
+test('варианты TMDB добавляют русское имя, сохраняют ручное и проверяют ID', async () => {
+  const s = await imported();
+  s.tmdb = {get:async p=>{assert.equal(p,'/person/10');return {id:10,name:'贾樟柯',also_known_as:['Jia Zhangke','Цзя Чжанкэ']};}};
+  await s.refreshDirectorNames(10);
+  assert.equal(s.state.directors[10].name, 'Цзя Чжанкэ');
+  s.setDirectorName(10, 'Моё имя');
+  await s.refreshDirectorNames(10);
+  assert.equal(s.state.directors[10].name, 'Моё имя');
+  const before=JSON.stringify(s.state);
+  s.tmdb={get:async()=>({id:11,name:'Другой'})};
+  await assert.rejects(s.refreshDirectorNames(10), /другом человеке/);
+  assert.equal(JSON.stringify(s.state),before);
+});
+
+test('повторное добавление ближайшего фильма не создаёт дубль', async () => {
+  const s=await imported();
+  const before=JSON.stringify(s.state.near);
+  s.addNear('m4');
+  assert.equal(JSON.stringify(s.state.near),before);
+  s.addNear('m1');s.addNear('m1');
+  assert.equal(s.state.near.filter(e=>e.ids.includes('m1')).length,1);
+});

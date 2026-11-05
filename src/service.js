@@ -468,8 +468,13 @@ class Service {
 
   ensureDirector(d) {
     const dirs = this.state.directors;
-    if (!dirs[d.id]) dirs[d.id] = { id: d.id, name: d.name, fav: false, marked: false, banned: false, needsChoice: false };
-    return dirs[d.id];
+    if (!dirs[d.id]) dirs[d.id] = { id: d.id, name: d.name, tmdbName: d.name, aliases: [], fav: false, marked: false, banned: false, needsChoice: false };
+    const saved = dirs[d.id];
+    saved.aliases = [...new Set([...(saved.aliases || []), saved.name, saved.tmdbName, d.name].filter(Boolean))];
+    if (!saved.tmdbName) saved.tmdbName = saved.name;
+    if (d.name && (!saved.tmdbName || /[А-Яа-яЁё]/.test(d.name))) saved.tmdbName = d.name;
+    saved.name = saved.userName || saved.tmdbName;
+    return saved;
   }
 
   ensureFilm(d, extra = {}) {
@@ -636,6 +641,31 @@ class Service {
   toggleRewatch(key) { const f = this.mustFilm(key); f.rewatch = !f.rewatch; this.save(); return this.state; }
   finishReview(key) { this.mustFilm(key).pending = false; this.save(); return this.state; }
   setTitle(key, title) { const f = this.mustFilm(key); f.userTitle = String(title || '').trim() || null; f.titleSource = f.userTitle ? 'manual' : null; this.save(); return this.state; }
+  setDirectorName(id, name) {
+    const d = this.state.directors[id];
+    if (!d) throw new Error('Режиссёр не найден.');
+    const clean = String(name || '').trim();
+    if (clean.length > 150) throw new Error('Имя должно быть не длиннее 150 символов.');
+    d.tmdbName = d.tmdbName || d.name;
+    d.aliases = [...new Set([...(d.aliases || []), d.name, d.tmdbName, clean].filter(Boolean))];
+    d.userName = clean || null;
+    d.name = d.userName || d.tmdbName;
+    this.save(); return this.state;
+  }
+
+  async refreshDirectorNames(id) {
+    const d = this.state.directors[id];
+    if (!d) throw new Error('Режиссёр не найден.');
+    if (!this.tmdb) throw new Error('Для загрузки имён нужен доступ к TMDB.');
+    const person = await this.tmdb.get(`/person/${encodeURIComponent(id)}`);
+    if (String(person.id) !== String(d.id)) throw new Error('TMDB вернул сведения о другом человеке.');
+    const names = [person.name, ...(person.also_known_as || [])].filter(n => typeof n === 'string' && n.trim());
+    const russian = names.find(n => /[А-Яа-яЁё]/.test(n));
+    this.ensureDirector({id:d.id,name:russian || person.name || d.tmdbName || d.name});
+    d.aliases = [...new Set([...(d.aliases || []), ...names])];
+    this.save(); return this.state;
+  }
+
   toggleFav(id) { const d = this.state.directors[id]; d.fav = !d.fav; this.save(); return this.state; }
   ban(id) { const d = this.state.directors[id]; d.banned = true; d.needsChoice = false; this.save(); return this.state; }
 

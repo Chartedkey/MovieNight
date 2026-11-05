@@ -98,8 +98,23 @@ function navHtml() {
   return `<nav class="side" aria-label="Разделы"><img class="logo" src="logo.png" alt="Movie Night">${items.map((n) => `<button class="nav ${ui.screen === n[0] ? 'on' : ''}" ${n[3] ? 'disabled title="Следующий этап"' : ''} data-a="${on(async () => { ui.screen = n[0]; if (n[0] === 'review') ui.review = await call('reviewList'); render(); if (n[0] === 'review') loadCandInfo(); if (n[0] === 'disks') loadDiskExtras(); })}"><span>${n[1]}</span>${n[2] ? `<span class="badge">${n[2]}</span>` : n[3] ? '<span class="sub" style="font-size:11px">скоро</span>' : ''}</button>`).join('')}<div class="ver">Версия ${esc(ui.version)}${ui.update ? `<br>${ui.update.state === 'ready' ? `<button class="mini on" data-a="${on(() => call('installUpdate'))}">Установить ${esc(ui.update.version)}</button>` : `Загружается ${esc(ui.update.version)}`}` : ''}</div></nav>`;
 }
 
+function directorNames(d) {
+  return [d.name, d.userName, d.tmdbName, ...(d.aliases || [])].filter(Boolean);
+}
+function nearFilmsForDirector(id) {
+  const keys = new Set((ui.state.near || []).flatMap(e=>e.ids));
+  return [...keys].map(k=>ui.state.films[k]).filter(f=>f && (String(f.dir)===String(id)||(f.directorIds||[]).some(d=>String(d)===String(id))));
+}
+function nearFilmTag(f) {
+  return (ui.state.near || []).some(e=>e.ids.includes(f.key)) ? '<span class="tag gold">В «Ближайших»</span>' : '';
+}
+function nearDirectorSummary(id, exclude = null) {
+  const films = nearFilmsForDirector(id).filter(f=>f.key!==exclude);
+  return films.length ? `<div class="sub" style="margin-top:8px">${exclude?'Другие фильмы режиссёра в «Ближайших»':'В «Ближайших»'}: ${films.map(f=>`${esc(titleOf(f))}${f.year?' ('+f.year+')':''}`).join(' · ')}</div>` : '';
+}
+
 function filmRow(f, extra = '') {
-  return `<div class="film" data-film="${f.key}"><div class="fwrap">${posterHtml(f.poster)}<div><div class="ftitle">${filmLine(f)}</div><div class="fmeta">${filmMeta(f)}</div></div></div><div class="row">${diskTags(f)}${extra}<button class="mini" aria-label="Ещё действия" data-menu="${f.key}">Ещё</button></div></div>`;
+  return `<div class="film" data-film="${f.key}"><div class="fwrap">${posterHtml(f.poster)}<div><div class="ftitle">${filmLine(f)}</div><div class="fmeta">${filmMeta(f)}</div></div></div><div class="row">${nearFilmTag(f)}${diskTags(f)}${extra}<button class="mini" aria-label="Ещё действия" data-menu="${f.key}">Ещё</button></div></div>`;
 }
 
 function library() {
@@ -110,12 +125,12 @@ function library() {
   films.forEach((f) => { if (!by.has(f.dir)) by.set(f.dir, []); by.get(f.dir).push(f); });
   const norm = (x) => String(x || '').toLowerCase().replace(/ё/g, 'е');
   const dirs = Object.values(s.directors).filter((d) => (by.get(d.id) || []).some((f) => ['queue', 'reserve'].includes(f.status)) || d.needsChoice)
-    .filter((d) => !q || norm(d.name).includes(q) || (by.get(d.id) || []).some((f) => norm(titleOf(f)).includes(q) || norm(f.originalTitle).includes(q)))
+    .filter((d) => !q || directorNames(d).some(n=>norm(n).includes(q)) || (by.get(d.id) || []).some((f) => norm(titleOf(f)).includes(q) || norm(f.originalTitle).includes(q)))
     .sort((a, b) => Number(b.needsChoice) - Number(a.needsChoice) || a.name.localeCompare(b.name, 'ru'));
   const cards = dirs.slice(0, ui.shown).map((d) => {
     const fs = by.get(d.id) || [];
     const q2 = fs.filter((f) => f.status === 'queue');
-    return `<section class="card"><div class="row between"><div><h2>${esc(d.name)}</h2><div class="sub">Посмотрено: ${fs.filter((f) => f.status === 'watched').length}, в запасе: ${fs.filter((f) => f.status === 'reserve').length}</div></div>${d.fav ? '<span class="tag gold">Любимый</span>' : ''}</div>${q2.map((f) => filmRow(f)).join('')}${d.needsChoice ? `<button class="btn primary" data-a="${on(() => openDirector(d.id))}">Выбрать следующий фильм</button>` : ''}<div class="row"><button class="mini" data-a="${on(() => openMarkup(d.id))}">Разметить фильмографию</button><button class="mini ${d.fav ? 'on' : ''}" data-a="${on(() => doState('toggleFav', d.id))}">${d.fav ? 'Любимый режиссёр' : 'Отметить любимым'}</button></div></section>`;
+    return `<section class="card"><div class="row between"><div><h2>${esc(d.name)}</h2>${d.tmdbName&&d.tmdbName!==d.name?`<div class="sub">TMDB: ${esc(d.tmdbName)}</div>`:''}<div class="sub">Посмотрено: ${fs.filter((f) => f.status === 'watched').length}, в запасе: ${fs.filter((f) => f.status === 'reserve').length}</div></div>${d.fav ? '<span class="tag gold">Любимый</span>' : ''}</div>${nearDirectorSummary(d.id)}${q2.map((f) => filmRow(f)).join('')}${d.needsChoice ? `<button class="btn primary" data-a="${on(() => openDirector(d.id))}">Выбрать следующий фильм</button>` : ''}<div class="row"><button class="mini" data-a="${on(()=>{ui.modal={type:'director-name',id:d.id};render();})}">Имя режиссёра</button><button class="mini" data-a="${on(() => openMarkup(d.id))}">Разметить фильмографию</button><button class="mini ${d.fav ? 'on' : ''}" data-a="${on(() => doState('toggleFav', d.id))}">${d.fav ? 'Любимый режиссёр' : 'Отметить любимым'}</button></div></section>`;
   }).join('');
   return `<div class="head"><div><h1>Библиотека</h1><div class="sub">Режиссёров: ${dirs.length}. Правая кнопка мыши на фильме открывает меню.</div></div><button class="btn primary" data-a="${on(() => { ui.modal = { type: 'add', q: '', results: null }; render(); })}">Добавить фильм или режиссёра</button></div><input id="libq" class="field" aria-label="Поиск" placeholder="Фильм или режиссёр" value="${esc(ui.q)}"><div class="grid">${cards}</div>${dirs.length > ui.shown ? `<button class="btn" data-a="${on(() => { ui.shown += 40; render(); })}">Показать ещё</button>` : ''}`;
 }
@@ -470,6 +485,11 @@ function modal() {
   const close = `<button class="mini" data-a="${on(() => { ui.modal = null; render(); })}">Закрыть</button>`;
   let body = '';
   let title = '';
+  if (m.type === 'director-name') {
+    const d = ui.state.directors[m.id];
+    title = 'Имя режиссёра';
+    body = `<div class="sub">Задай привычное имя. ID, фильмы, оценки и разметка сохранятся. Поиск работает по твоему имени и сохранённым вариантам TMDB.</div><div class="sub">TMDB: ${esc(d.tmdbName || d.name)}</div><input id="director-name" class="field wide" maxlength="150" value="${esc(d.userName || d.name)}"><div class="row"><button class="btn primary" data-a="${on(async()=>{await doState('setDirectorName',m.id,document.getElementById('director-name').value);ui.modal=null;render();})}">Сохранить имя</button><button class="btn" data-a="${on(async()=>{await doState('setDirectorName',m.id,'');ui.modal=null;render();})}">Вернуть имя TMDB</button><button class="btn" data-a="${on(async()=>{const typed=document.getElementById('director-name').value;await doState('refreshDirectorNames',m.id);const input=document.getElementById('director-name');if(input)input.value=typed;})}">Загрузить варианты TMDB</button></div><div class="sub">Известные варианты: ${esc(directorNames(d).filter((v,i,a)=>a.indexOf(v)===i).join(' · '))}</div>`;
+  }
   if (m.type === 'file-name') {
     title = 'Имя конкретного файла или папки';
     const e = ui.state.files[m.id];
@@ -525,7 +545,7 @@ function menu() {
     ['Открыть на Кинопоиске', () => { ui.menu = null; render(); call('openExternal', f.kpLink || kpSearch(f)); }],
     ['Разметить режиссёра', () => { ui.menu = null; openMarkup(f.dir); }],
   ];
-  return `<div style="position:fixed;inset:0;z-index:30" data-a="${on(() => { ui.menu = null; render(); })}"></div><div class="menu" role="menu" style="left:${ui.menu.x}px;top:${ui.menu.y}px">${items.map((i) => `<button class="mitem" role="menuitem" data-a="${on(i[1])}">${i[0]}</button>`).join('')}</div>`;
+  return `<div style="position:fixed;inset:0;z-index:30" data-a="${on(() => { ui.menu = null; render(); })}"></div><div class="menu" role="menu" style="left:${ui.menu.x}px;top:${ui.menu.y}px;max-height:calc(100vh - ${ui.menu.y+8}px);overflow-y:auto">${nearDirectorSummary(f.dir,f.key)}${items.map((i) => `<button class="mitem" role="menuitem" data-a="${on(i[1])}">${i[0]}</button>`).join('')}</div>`;
 }
 
 function renameModal() {

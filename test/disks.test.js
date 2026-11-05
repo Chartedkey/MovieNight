@@ -602,3 +602,22 @@ test('сброс подбора ждёт уже отправленное сох�
   assert.deepEqual(calls,['resetNightDraft']);
   assert.equal(renderer.run('ui.nightResetting'),false);assert.equal(renderer.run('ui.nightEditing'),null);assert.equal(renderer.run('ui.nightMessage'),null);assert.equal(renderer.run('ui.nightEdit.slots.every(s=>!s.film&&!s.locked)'),true);
 });
+
+test('библиотека ищет варианты имён, показывает ближайшие фильмы и обновляет отметки', () => {
+  const r=orphanRenderer(async()=>{});
+  r.run(`ui.files=new Map();ui.state.folders=[];ui.state.near=[{ids:['m1']}];
+    ui.state.directors={1:{id:1,name:'Цзя Чжанкэ',tmdbName:'贾樟柯',aliases:['Jia Zhangke']}};
+    ui.state.films={m1:{key:'m1',dir:1,status:'queue',userTitle:'Мир',year:2004},m2:{key:'m2',dir:1,status:'queue',userTitle:'Сити 24',year:2008}};`);
+  for(const name of ['Цзя','贾樟柯','Jia Zhangke']){
+    assert.match(r.run(`ui.q=${JSON.stringify(name)};library()`),/Сити 24/);
+  }
+  assert.match(r.run("filmRow(ui.state.films.m1)"),/В «Ближайших»/);
+  assert.doesNotMatch(r.run("filmRow(ui.state.films.m2)"),/В «Ближайших»/);
+  assert.match(r.run("ui.menu={key:'m1',x:0,y:0};menu()"),/Убрать из ближайших/);
+  const menu=r.run("ui.menu.key='m2';menu()");
+  assert.match(menu,/Другие фильмы режиссёра в «Ближайших»: Мир \(2004\)/);
+  assert.match(menu,/Добавить на ближайший просмотр/);
+  r.run('ui.state.near=[]');
+  assert.doesNotMatch(r.run('library()'),/В «Ближайших»/);
+  assert.doesNotMatch(r.run('menu()'),/Другие фильмы режиссёра/);
+});
