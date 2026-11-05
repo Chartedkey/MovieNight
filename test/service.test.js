@@ -294,3 +294,15 @@ test('повторное добавление ближайшего фильма 
   s.addNear('m1');s.addNear('m1');
   assert.equal(s.state.near.filter(e=>e.ids.includes('m1')).length,1);
 });
+
+test('сортировка библиотеки и ручная фамилия сохраняются без изменения очередей', async()=>{
+  const s=await imported();const films=JSON.stringify(s.state.films),near=JSON.stringify(s.state.near);
+  s.setLibrarySort('surname');s.setDirectorName(10,'Эрик Ромер','Ромер');
+  s.ensureDirector({id:10,name:'Eric Rohmer'});s.save();
+  const r=new Service({dir:s.dir});assert.equal(r.state.librarySort,'surname');assert.equal(r.state.directors[10].sortSurname,'Ромер');
+  r.setDirectorName(10,'Другое имя');assert.equal(r.state.directors[10].sortSurname,'Ромер');
+  r.setDirectorName(10,'Другое имя','');assert.equal(r.state.directors[10].sortSurname,null);
+  assert.equal(JSON.stringify(r.state.films),films);assert.equal(JSON.stringify(r.state.near),near);
+  assert.throws(()=>r.setLibrarySort('random'),/порядок/);
+  const before=JSON.stringify(r.state);assert.throws(()=>r.setDirectorName(10,'Новое','X'.repeat(151)),/Фамилия/);assert.equal(JSON.stringify(r.state),before);
+});

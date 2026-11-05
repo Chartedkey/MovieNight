@@ -641,11 +641,14 @@ class Service {
   toggleRewatch(key) { const f = this.mustFilm(key); f.rewatch = !f.rewatch; this.save(); return this.state; }
   finishReview(key) { this.mustFilm(key).pending = false; this.save(); return this.state; }
   setTitle(key, title) { const f = this.mustFilm(key); f.userTitle = String(title || '').trim() || null; f.titleSource = f.userTitle ? 'manual' : null; this.save(); return this.state; }
-  setDirectorName(id, name) {
+  setDirectorName(id, name, surname) {
     const d = this.state.directors[id];
     if (!d) throw new Error('Режиссёр не найден.');
     const clean = String(name || '').trim();
     if (clean.length > 150) throw new Error('Имя должно быть не длиннее 150 символов.');
+    const sortSurname = surname === undefined ? d.sortSurname : String(surname || '').trim();
+    if (sortSurname && sortSurname.length > 150) throw new Error('Фамилия должна быть не длиннее 150 символов.');
+    if (surname !== undefined) d.sortSurname = sortSurname || null;
     d.tmdbName = d.tmdbName || d.name;
     d.aliases = [...new Set([...(d.aliases || []), d.name, d.tmdbName, clean].filter(Boolean))];
     d.userName = clean || null;
@@ -663,6 +666,12 @@ class Service {
     const russian = names.find(n => /[А-Яа-яЁё]/.test(n));
     this.ensureDirector({id:d.id,name:russian || person.name || d.tmdbName || d.name});
     d.aliases = [...new Set([...(d.aliases || []), ...names])];
+    this.save(); return this.state;
+  }
+
+  setLibrarySort(mode) {
+    if (!['name', 'surname'].includes(mode)) throw new Error('Неизвестный порядок сортировки.');
+    this.state.librarySort = mode;
     this.save(); return this.state;
   }
 

@@ -621,3 +621,28 @@ test('библиотека ищет варианты имён, показыва�
   assert.doesNotMatch(r.run('library()'),/В «Ближайших»/);
   assert.doesNotMatch(r.run('menu()'),/Другие фильмы режиссёра/);
 });
+
+test('библиотека: постоянный алфавит независимо от задач, переключение имени и фамилии',()=>{
+  const r=orphanRenderer(async()=>{});
+  r.run(`ui.files=new Map();ui.state.near=[];ui.state.folders=[];ui.state.directors={1:{id:1,name:'Акира Куросава',needsChoice:false},2:{id:2,name:'Роб Райнер',needsChoice:true},3:{id:3,name:'Ингмар Бергман'}};ui.state.films={};for(const d of Object.values(ui.state.directors))ui.state.films['m'+d.id]={key:'m'+d.id,dir:d.id,status:'queue',userTitle:'Фильм '+d.id};`);
+  const names=()=>JSON.parse(r.run('JSON.stringify([...library().matchAll(/<h2>(.*?)<\\/h2>/g)].map(m=>m[1]))'));
+  assert.deepEqual(names(),['Акира Куросава','Ингмар Бергман','Роб Райнер']);
+  r.run('ui.state.directors[1].needsChoice=true;ui.state.directors[2].needsChoice=false');
+  assert.deepEqual(names(),['Акира Куросава','Ингмар Бергман','Роб Райнер']);
+  r.run("ui.state.librarySort='surname'");assert.deepEqual(names(),['Ингмар Бергман','Акира Куросава','Роб Райнер']);
+  r.run("ui.libraryLetter='К'");assert.deepEqual(names(),['Акира Куросава']);
+  r.run('ui.libraryNeeds=true');assert.deepEqual(names(),['Акира Куросава']);
+  r.run('ui.state.directors[1].needsChoice=false');assert.deepEqual(names(),[]);
+  assert.match(r.run('library()'),/По этим условиям режиссёры не найдены/);
+});
+
+test('алфавит библиотеки: Ё, латиница, иероглифы и составная фамилия',()=>{
+  const r=orphanRenderer(async()=>{});
+  r.run("ui.state.librarySort='surname'");
+  assert.equal(r.run("directorLetter({name:'Алекс Ёлкин'})"),'Е');
+  assert.equal(r.run("directorLetter({name:'Jia Zhangke'})"),'latin');
+  assert.equal(r.run("directorLetter({name:'贾樟柯'})"),'other');
+  assert.equal(r.run("directorSortKey({name:'Ларс фон Триер',sortSurname:'фон Триер'})"),'фон Триер');
+  assert.equal(r.run("directorLetter({name:'Ларс фон Триер',sortSurname:'фон Триер'})"),'Ф');
+  assert.equal(r.run("directorLetter({name:'Цзя Чжанкэ',sortSurname:'Цзя'})"),'Ц');
+});

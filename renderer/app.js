@@ -2,7 +2,7 @@
 const $app = document.getElementById('app');
 const bridge = window.api || { call: async () => { throw new Error('Не загрузился мост к программе (preload).'); }, onProgress() {}, onUpdate() {} };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const ui = { screen: 'library', q: '', shown: 40, modal: null, menu: null, toast: null, progress: null, version: '', update: null, reviewQ: {}, reviewResults: {}, busy: false, error: null, hasKey: false, state: null, review: [], reviewShown: 12, reviewPeople: {}, reviewNote: {}, candInfo: {}, candLoading: false, rescue: null, diskTab: 'folders', scan: null, orphanSearch: {}, orphanQ: {}, orphanShown: 12, dups: [], plan: [], planFailed: [] };
+const ui = { screen: 'library', libraryLetter: 'all', libraryNeeds: false, q: '', shown: 40, modal: null, menu: null, toast: null, progress: null, version: '', update: null, reviewQ: {}, reviewResults: {}, busy: false, error: null, hasKey: false, state: null, review: [], reviewShown: 12, reviewPeople: {}, reviewNote: {}, candInfo: {}, candLoading: false, rescue: null, diskTab: 'folders', scan: null, orphanSearch: {}, orphanQ: {}, orphanShown: 12, dups: [], plan: [], planFailed: [] };
 const actions = {};
 let actionSeq = 0;
 
@@ -99,7 +99,7 @@ function navHtml() {
 }
 
 function directorNames(d) {
-  return [d.name, d.userName, d.tmdbName, ...(d.aliases || [])].filter(Boolean);
+  return [d.name, d.userName, d.tmdbName, d.sortSurname, ...(d.aliases || [])].filter(Boolean);
 }
 function nearFilmsForDirector(id) {
   const keys = new Set((ui.state.near || []).flatMap(e=>e.ids));
@@ -117,6 +117,20 @@ function filmRow(f, extra = '') {
   return `<div class="film" data-film="${f.key}"><div class="fwrap">${posterHtml(f.poster)}<div><div class="ftitle">${filmLine(f)}</div><div class="fmeta">${filmMeta(f)}</div></div></div><div class="row">${nearFilmTag(f)}${diskTags(f)}${extra}<button class="mini" aria-label="Ещё действия" data-menu="${f.key}">Ещё</button></div></div>`;
 }
 
+function directorSortKey(d) {
+  const name = String(d.name || '').trim();
+  return ui.state.librarySort === 'surname' ? (d.sortSurname || name.split(/\s+/).pop() || name) : name;
+}
+function directorLetter(d) {
+  const first = directorSortKey(d).replace(/^[^\p{L}]+/u, '').charAt(0).toUpperCase().replace('Ё','Е');
+  return /^[А-Я]$/.test(first) ? first : /^[A-Z]$/.test(first) ? 'latin' : 'other';
+}
+function libraryControls() {
+  const mode = ui.state.librarySort || 'name';
+  const letters = [['all','Все'], ...Array.from('АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ', x=>[x,x]), ['latin','A–Z'], ['other','Другие']];
+  return `<div class="library-tools"><input id="libq" class="field" aria-label="Поиск" placeholder="Фильм или режиссёр" value="${esc(ui.q)}"><div class="library-letters" role="group" aria-label="Алфавитный указатель">${letters.map(([key,label])=>`<button class="mini ${ui.libraryLetter===key?'on':''}" aria-pressed="${ui.libraryLetter===key}" data-a="${on(()=>{ui.libraryLetter=key;ui.shown=40;render();})}">${label}</button>`).join('')}</div></div><div class="row"><span class="sub">Порядок:</span>${[['name','По имени'],['surname','По фамилии']].map(([key,label])=>`<button class="mini ${mode===key?'on':''}" aria-pressed="${mode===key}" data-a="${on(async()=>{ui.libraryLetter='all';ui.shown=40;await doState('setLibrarySort',key);})}">${label}</button>`).join('')}<button class="mini ${ui.libraryNeeds?'on':''}" aria-pressed="${ui.libraryNeeds}" data-a="${on(()=>{ui.libraryNeeds=!ui.libraryNeeds;ui.shown=40;render();})}">Нужно выбрать следующий фильм</button>${ui.libraryLetter!=='all'||ui.libraryNeeds||ui.q?`<button class="mini" data-a="${on(()=>{ui.libraryLetter='all';ui.libraryNeeds=false;ui.q='';ui.shown=40;render();})}">Сбросить фильтры</button>`:''}</div>`;
+}
+
 function library() {
   const s = ui.state;
   const q = ui.q.trim().toLowerCase().replace(/ё/g, 'е');
@@ -126,13 +140,18 @@ function library() {
   const norm = (x) => String(x || '').toLowerCase().replace(/ё/g, 'е');
   const dirs = Object.values(s.directors).filter((d) => (by.get(d.id) || []).some((f) => ['queue', 'reserve'].includes(f.status)) || d.needsChoice)
     .filter((d) => !q || directorNames(d).some(n=>norm(n).includes(q)) || (by.get(d.id) || []).some((f) => norm(titleOf(f)).includes(q) || norm(f.originalTitle).includes(q)))
-    .sort((a, b) => Number(b.needsChoice) - Number(a.needsChoice) || a.name.localeCompare(b.name, 'ru'));
+    .filter(d => !ui.libraryNeeds || d.needsChoice)
+    .filter(d => ui.libraryLetter === 'all' || directorLetter(d) === ui.libraryLetter)
+    .sort((a,b) => {
+      const group = d => directorLetter(d)==='latin'?1:directorLetter(d)==='other'?2:0;
+      return group(a)-group(b) || directorSortKey(a).localeCompare(directorSortKey(b),'ru') || a.name.localeCompare(b.name,'ru') || String(a.id).localeCompare(String(b.id),'en');
+    });
   const cards = dirs.slice(0, ui.shown).map((d) => {
     const fs = by.get(d.id) || [];
     const q2 = fs.filter((f) => f.status === 'queue');
     return `<section class="card"><div class="row between"><div><h2>${esc(d.name)}</h2>${d.tmdbName&&d.tmdbName!==d.name?`<div class="sub">TMDB: ${esc(d.tmdbName)}</div>`:''}<div class="sub">Посмотрено: ${fs.filter((f) => f.status === 'watched').length}, в запасе: ${fs.filter((f) => f.status === 'reserve').length}</div></div>${d.fav ? '<span class="tag gold">Любимый</span>' : ''}</div>${nearDirectorSummary(d.id)}${q2.map((f) => filmRow(f)).join('')}${d.needsChoice ? `<button class="btn primary" data-a="${on(() => openDirector(d.id))}">Выбрать следующий фильм</button>` : ''}<div class="row"><button class="mini" data-a="${on(()=>{ui.modal={type:'director-name',id:d.id};render();})}">Имя режиссёра</button><button class="mini" data-a="${on(() => openMarkup(d.id))}">Разметить фильмографию</button><button class="mini ${d.fav ? 'on' : ''}" data-a="${on(() => doState('toggleFav', d.id))}">${d.fav ? 'Любимый режиссёр' : 'Отметить любимым'}</button></div></section>`;
   }).join('');
-  return `<div class="head"><div><h1>Библиотека</h1><div class="sub">Режиссёров: ${dirs.length}. Правая кнопка мыши на фильме открывает меню.</div></div><button class="btn primary" data-a="${on(() => { ui.modal = { type: 'add', q: '', results: null }; render(); })}">Добавить фильм или режиссёра</button></div><input id="libq" class="field" aria-label="Поиск" placeholder="Фильм или режиссёр" value="${esc(ui.q)}"><div class="grid">${cards}</div>${dirs.length > ui.shown ? `<button class="btn" data-a="${on(() => { ui.shown += 40; render(); })}">Показать ещё</button>` : ''}`;
+  return `<div class="head"><div><h1>Библиотека</h1><div class="sub">Режиссёров: ${dirs.length}. Правая кнопка мыши на фильме открывает меню.</div></div><button class="btn primary" data-a="${on(() => { ui.modal = { type: 'add', q: '', results: null }; render(); })}">Добавить фильм или режиссёра</button></div>${libraryControls()}<div class="grid">${cards || '<div class="sub">По этим условиям режиссёры не найдены.</div>'}</div>${dirs.length > ui.shown ? `<button class="btn" data-a="${on(() => { ui.shown += 40; render(); })}">Показать ещё</button>` : ''}`;
 }
 
 function near() {
@@ -488,7 +507,7 @@ function modal() {
   if (m.type === 'director-name') {
     const d = ui.state.directors[m.id];
     title = 'Имя режиссёра';
-    body = `<div class="sub">Задай привычное имя. ID, фильмы, оценки и разметка сохранятся. Поиск работает по твоему имени и сохранённым вариантам TMDB.</div><div class="sub">TMDB: ${esc(d.tmdbName || d.name)}</div><input id="director-name" class="field wide" maxlength="150" value="${esc(d.userName || d.name)}"><div class="row"><button class="btn primary" data-a="${on(async()=>{await doState('setDirectorName',m.id,document.getElementById('director-name').value);ui.modal=null;render();})}">Сохранить имя</button><button class="btn" data-a="${on(async()=>{await doState('setDirectorName',m.id,'');ui.modal=null;render();})}">Вернуть имя TMDB</button><button class="btn" data-a="${on(async()=>{const typed=document.getElementById('director-name').value;await doState('refreshDirectorNames',m.id);const input=document.getElementById('director-name');if(input)input.value=typed;})}">Загрузить варианты TMDB</button></div><div class="sub">Известные варианты: ${esc(directorNames(d).filter((v,i,a)=>a.indexOf(v)===i).join(' · '))}</div>`;
+    body = `<div class="sub">Задай привычное имя. ID, фильмы, оценки и разметка сохранятся. Поиск работает по твоему имени и сохранённым вариантам TMDB.</div><div class="sub">TMDB: ${esc(d.tmdbName || d.name)}</div><label for="director-name" class="sub">Отображаемое имя</label><input id="director-name" class="field wide" maxlength="150" value="${esc(d.userName || d.name)}"><label for="director-surname" class="sub">Фамилия для сортировки (необязательно)</label><input id="director-surname" class="field wide" maxlength="150" value="${esc(d.sortSurname || '')}" placeholder="Например: Куросава"><div class="sub">Если не указана, используем последнее слово имени. Для составных фамилий и другого порядка слов укажи её вручную.</div><div class="row"><button class="btn primary" data-a="${on(async()=>{await doState('setDirectorName',m.id,document.getElementById('director-name').value,document.getElementById('director-surname').value);ui.modal=null;render();})}">Сохранить имя</button><button class="btn" data-a="${on(async()=>{await doState('setDirectorName',m.id,'');ui.modal=null;render();})}">Вернуть имя TMDB</button><button class="btn" data-a="${on(async()=>{const typed=document.getElementById('director-name').value;const surname=document.getElementById('director-surname').value;await doState('refreshDirectorNames',m.id);const input=document.getElementById('director-name');if(input)input.value=typed;const sortInput=document.getElementById('director-surname');if(sortInput)sortInput.value=surname;})}">Загрузить варианты TMDB</button></div><div class="sub">Известные варианты: ${esc(directorNames(d).filter((v,i,a)=>a.indexOf(v)===i).join(' · '))}</div>`;
   }
   if (m.type === 'file-name') {
     title = 'Имя конкретного файла или папки';
