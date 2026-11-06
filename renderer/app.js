@@ -178,7 +178,10 @@ function morning() {
     const paths = ui.files.get(f.key) || [];
     return `<section class="card"><div class="fwrap">${posterHtml(f.poster, true)}<div><h2>${filmLine(f)}</h2><div class="sub">${f.status === 'dropped' ? 'Брошен' : 'Посмотрен'} · ${esc((ui.state.directors[f.dir] || {}).name || '')}</div></div></div>${f.pending ? `<div class="row" style="gap:4px" aria-label="Оценка">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => `<button class="mini ${f.rating === n ? 'on' : ''}" data-a="${on(() => doState('rate', f.key, n))}">${n}</button>`).join('')}</div><div class="row"><button class="mini ${f.rewatch ? 'on' : ''}" data-a="${on(() => doState('toggleRewatch', f.key))}">В «Пересмотреть»</button><button class="btn ${f.moveTask ? '' : 'primary'}" data-a="${on(() => doState('finishReview', f.key))}">Оценка готова</button></div>` : ''}${f.moveTask ? `<div class="label">Перенеси на резервный диск и удали отсюда${paths.length > 1 ? `. Копий: ${paths.length}` : ''}</div>${paths.map((e) => `<div class="film"><div class="path">${esc(e.path)}<br>${gb(e.size)}</div><button class="mini" data-a="${on(() => call('openEntry', e.id))}">Открыть папку</button></div>`).join('')}<div class="row"><button class="mini" data-a="${on(() => doState('keepOnDisk', f.key))}">Оставить на диске</button><button class="mini" data-a="${on(() => runScan())}">Я перенёс, проверить</button></div>` : ''}</section>`;
   }).join('');
-  return `<div class="head"><div><h1>Утренний разбор</h1><div class="sub">Задача на перенос закроется сама, когда файла не останется ни в одной папке.</div></div></div>${typeof nightMorning === 'function' ? nightMorning() : ''}${today}<div class="grid wide">${cards || (today ? '' : '<div class="card sub">Задач нет.</div>')}</div>`;
+  const night = typeof nightMorning === 'function' ? nightMorning() : '';
+  const tasks = cards ? `<div class="grid wide">${cards}</div>` : '';
+  const empty = !cards && !night && !today ? '<div class="card sub">Задач нет.</div>' : '';
+  return `<div class="head"><div><h1>Утренний разбор</h1><div class="sub">Задача на перенос закроется сама, когда файла не останется ни в одной папке.</div></div></div>${tasks}${night}${today}${empty}`;
 }
 
 function isNear(key) { return (ui.state.near || []).some(e=>e.ids.includes(key)); }
