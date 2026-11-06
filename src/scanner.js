@@ -11,6 +11,8 @@ const EPISODE = /(?:^|[\s._\-[(])(?:s\d{1,2}[\s._-]?e\d{1,3}|\d{1,2}x\d{2,3}|с�
 const SEASON_DIR = /^(сезон|season|s)[\s._-]*\d+$|^\d+[\s._-]*сезон$/i;
 const PART = /(?:^|[\s._\-[(])(?:cd|dvd|disc|disk|part|pt|часть|диск)[\s._-]*(\d)(?:[\s._\-\])]|$)/i;
 const TAGS = /[\s._\-[(]+(?:\d{3,4}p|bdremux|l[1-9](?=[\s._\-\])]|$)|bdrip|brrip|dvdrip|webrip|web-dl|hdrip|hdtv|bluray|blu-ray|remux|x26[45]|h\.?26[45]|hevc|xvid|divx|ac3|dts|aac|rus|eng|dub|mvo|avo|криттерион|criterion|director'?s cut|режисс[её]рская).*$/i;
+const DVD_TITLE_VOB = /^VTS_\d{2}_[1-9]\.VOB$/i;
+const DVD_VOB = /^(?:VTS_\d{2}_[0-9]|VIDEO_TS)\.VOB$/i;
 const MIN_FILM_BYTES = 100 * 1024 * 1024;
 
 function parseName(raw, isFile) {
@@ -49,13 +51,15 @@ async function dirSize(dir) {
 // На DVD фильм лежит в самом большом наборе VTS_xx.
 async function discMain(videoTs) {
   const sets = new Map();
+  const files = [];
   for (const e of await list(videoTs)) {
+    if (e.isFile() && DVD_VOB.test(e.name)) files.push(path.join(videoTs,e.name));
     const m = e.name.match(/^VTS_(\d\d)_[1-9]\.VOB$/i);
     if (m && e.isFile()) sets.set(m[1], (sets.get(m[1]) || 0) + (await fileInfo(path.join(videoTs, e.name))).size);
   }
   let best = null;
   sets.forEach((v, k) => { if (!best || v > best.size) best = { set: k, size: v }; });
-  return best;
+  return best ? { ...best, files } : null;
 }
 
 function sidecars(names) {
@@ -77,11 +81,17 @@ async function scanDir(dir, ctx, isRoot) {
   const name = path.basename(dir) || dir;
   const lowerNames = new Map(entries.map((e) => [e.name.toLowerCase(), e]));
 
-  const disc = (lowerNames.get('video_ts') && lowerNames.get('video_ts').isDirectory() && 'dvd') || (lowerNames.get('bdmv') && lowerNames.get('bdmv').isDirectory() && 'bluray');
+  const wrappedDvd = lowerNames.get('video_ts')?.isDirectory();
+  const otherVideos = entries.some(e=>e.isFile() && VIDEO.has(path.extname(e.name).toLowerCase()) && !DVD_VOB.test(e.name) && !BONUS_FILE.test(e.name));
+  const otherDirs = entries.some(e=>e.isDirectory() && !SKIP_DIRS.has(e.name.toLowerCase()) && !e.name.startsWith('.') && !BONUS_DIR.test(e.name) && e.name.toLowerCase()!=='audio_ts');
+  const flatDvd = !wrappedDvd && !otherVideos && !otherDirs && entries.some(e=>e.isFile() && DVD_TITLE_VOB.test(e.name));
+  const disc = (wrappedDvd || flatDvd) ? 'dvd' : lowerNames.get('bdmv')?.isDirectory() ? 'bluray' : null;
   if (disc) {
-    const inner = disc === 'dvd' ? lowerNames.get('video_ts').name : null;
-    const main = inner ? await discMain(path.join(dir, inner)) : null;
-    ctx.out.push({ kind: disc, path: dir, name, ...parseName(name, false), size: await dirSize(dir), mainSet: main ? main.set : null, mtime: (await fs.promises.stat(dir)).mtimeMs, video: inner ? path.join(dir, inner) : dir, sidecars: [] });
+    const video = wrappedDvd ? path.join(dir,lowerNames.get('video_ts').name) : dir;
+    const main = disc==='dvd' ? await discMain(video) : null;
+    const internalDiscRoot = disc==='dvd' && name.toLowerCase()==='video_ts';
+    const displayName = internalDiscRoot ? path.basename(path.dirname(dir)) : name;
+    ctx.out.push({ kind: disc, path: dir, name: displayName, ...parseName(displayName, false), size: await dirSize(dir), mainSet: main ? main.set : null, dvdParts: main?.files || [], internalDiscRoot, mtime: (await fs.promises.stat(dir)).mtimeMs, video, sidecars: flatDvd ? sidecars(entries.filter(e=>e.isFile()).map(e=>e.name)) : [] });
     return;
   }
 

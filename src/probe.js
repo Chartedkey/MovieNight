@@ -19,10 +19,12 @@ async function probeEntry(entry, bin) {
   let embedded = [];
   if (entry.kind === 'dvd' && entry.mainSet) {
     try {
-      const fh = await fs.promises.open(path.join(entry.video, `VTS_${entry.mainSet}_0.IFO`), 'r');
+      const wanted = `VTS_${entry.mainSet}_0.IFO`.toLowerCase();
+      const name = (await fs.promises.readdir(entry.video)).find(n=>n.toLowerCase()===wanted);
+      if (!name) throw new Error('DVD IFO not found');
+      const fh = await fs.promises.open(path.join(entry.video,name),'r');
       const buf = Buffer.alloc(4096);
-      await fh.read(buf, 0, 4096, 0);
-      await fh.close();
+      try { await fh.read(buf,0,4096,0); } finally { await fh.close(); }
       embedded = parseIfoSubtitles(buf) || [];
     } catch (e) {
       out.probeError = true;

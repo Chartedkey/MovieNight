@@ -728,3 +728,82 @@ test('массовый выбор сохраняется при обновлен
   plan[0].to='a (2001)';await r.run('loadDiskExtras()');assert.equal(r.run('renameSelected(ui.plan[0])'),false);assert.equal(r.run('renameSelected(ui.plan[1])'),true);
   r.run('clearAllRenames()');await r.run('loadDiskExtras()');assert.equal(r.run('ui.plan.filter(renameSelected).length'),0);
 });
+
+function flatDvd(root, count=4) {
+  const paths=[];
+  for(let i=0;i<count;i++){
+    const set=i<9?'05':'06',part=i<9?i+1:i-8;
+    const p=path.join(root,`VTS_${set}_${part}.VOB`);big(p);paths.push(p);
+  }
+  return paths;
+}
+function legacyParts(s,paths,filmKeys=[]) {
+  s.state.files={};
+  paths.forEach((p,i)=>{const st=fs.statSync(p),id=p.toLowerCase();s.state.files[id]={id,path:p,name:path.basename(p),title:`VTS ${i+1}`,kind:'file',size:st.size,mtime:st.mtimeMs,role:'normal',probed:true,duration:22,state:filmKeys[i]?'linked':'orphan',filmKey:filmKeys[i],matchMethod:filmKeys[i]?'manual':undefined};});
+}
+
+test('DVD без VIDEO_TS: папка и добавленный корень — один фильм, основной набор по сумме частей',async()=>{
+  const r=tmp(),dvd=path.join(r,'Невесты приходят');const paths=flatDvd(dvd,12);
+  big(path.join(dvd,'VTS_01_1.VOB'),1000);big(path.join(dvd,'VTS_05_0.VOB'),1000);
+  fs.mkdirSync(path.join(dvd,'AUDIO_TS'));fs.writeFileSync(path.join(dvd,'VIDEO_TS.IFO'),'header');
+  const all=await scanFolder(r),direct=await scanFolder(dvd);
+  for(const result of [all,direct]){
+    assert.equal(result.entries.length,1);const e=result.entries[0];assert.equal(e.kind,'dvd');assert.equal(e.title,'Невесты приходят');assert.equal(e.path,dvd);assert.equal(e.video,dvd);assert.equal(e.mainSet,'05');assert.equal(e.dvdParts.length,14);assert.equal(e.size,paths.length*(MIN_FILM_BYTES+1)+2000+6);
+  }
+});
+
+test('DVD без IFO и с нижним регистром файлов: части не попадают в отдельные фильмы, субтитры читаются',async()=>{
+  const dvd=path.join(tmp(),'Фильм');flatDvd(dvd,1);fs.renameSync(path.join(dvd,'VTS_05_1.VOB'),path.join(dvd,'vts_05_1.vob'));
+  const {probeEntry}=require('../src/probe');let e=(await scanFolder(dvd)).entries[0];
+  const noIfo=await probeEntry(e);assert.equal(noIfo.duration,null);assert.equal(noIfo.probeError,true);
+  const buf=Buffer.alloc(0x300);buf.write('DVDVIDEO-VTS',0,'latin1');buf.writeUInt16BE(1,0x254);buf.write('ru',0x258,'latin1');fs.writeFileSync(path.join(dvd,'vts_05_0.ifo'),buf);
+  const info=await probeEntry(e);assert.equal(info.subs.state,'ru');assert.equal(info.probeError,false);
+});
+
+test('обычные VOB и коллекция с отдельным MKV не объединяются в один DVD',async()=>{
+  const r=tmp();big(path.join(r,'Первый.vob'));big(path.join(r,'Второй.vob'));
+  assert.equal((await scanFolder(r)).entries.length,2);
+  flatDvd(r,2);big(path.join(r,'Другой фильм.mkv'));
+  const es=(await scanFolder(r)).entries;assert.ok(es.some(e=>e.path.endsWith('Другой фильм.mkv')));assert.ok(!es.some(e=>e.kind==='dvd'));
+});
+
+test('переход старых VOB в DVD не считается потерей диска и сохраняет ручную связь и библиотеку',async()=>{
+  const r=tmp(),dvd=path.join(r,'Невесты приходят'),paths=flatDvd(dvd,12);
+  const s=svc({m1:film(1,'Моё название',1978,{rating:9,wish:true})});s.addFolder(r);legacyParts(s,paths,paths.map(()=> 'm1'));s.refreshTasks();const original=JSON.stringify(s.state.films);
+  s.state.files[paths[0].toLowerCase()].renamePreference='custom';s.state.files[paths[0].toLowerCase()].customName='Имя части';
+  await s.scanAll();const es=Object.values(s.state.files);assert.equal(es.length,1);const e=es[0];
+  assert.equal(e.kind,'dvd');assert.equal(e.filmKey,'m1');assert.equal(e.matchMethod,'manual');assert.equal(e.state,'linked');assert.equal(e.duration,null);assert.equal(e.customName,undefined);assert.equal(e.dvdPartHistory.length,12);assert.equal(e.dvdPartHistory[0].customName,'Имя части');assert.equal(s.state.folders[0].status,'ok');assert.equal(Object.keys(s.state.lost||{}).length,0);assert.equal(JSON.stringify(s.state.films),original);assert.ok(paths.every(p=>fs.existsSync(p)));
+  await s.scanAll();assert.equal(s.filmEntries('m1').length,1);assert.equal(s.filmEntries('m1')[0].dvdPartHistory.length,12);
+  const restored=new Service({dir:s.dir});assert.equal(restored.filmEntries('m1').length,1);assert.equal(restored.state.films.m1.rating,9);
+});
+
+test('разные ручные связи частей DVD сохраняются в истории и требуют разбора папки',async()=>{
+  const r=tmp(),dvd=path.join(r,'Первый'),paths=flatDvd(dvd,2);const s=svc({m1:film(1,'Первый',1978),m2:film(2,'Второй',2000)});s.addFolder(r);legacyParts(s,paths,['m1','m2']);await s.scanAll();
+  const e=Object.values(s.state.files)[0];assert.equal(e.state,'orphan');assert.equal(e.forceReview,true);assert.deepEqual(e.candidates,['m1','m2']);assert.equal(e.filmKey,undefined);assert.equal(e.dvdPartHistory.length,2);
+  s.chooseEntryFilm(e.id,'m2');await s.scanAll();assert.equal(s.filmEntries('m2').length,1);assert.equal(s.filmEntries('m1').length,0);
+});
+
+test('объединение DVD сохраняет игнорирование всех частей и явный запрет автоматической связи',async()=>{
+  const r=tmp(),paths=flatDvd(path.join(r,'Первый'),2);const s=svc({m1:film(1,'Первый',1978)});s.addFolder(r);legacyParts(s,paths);
+  Object.values(s.state.files).forEach(e=>e.state='ignored');await s.scanAll();let e=Object.values(s.state.files)[0];assert.equal(e.state,'ignored');assert.equal(e.dvdPartHistory.length,2);
+  const s2=svc({m1:film(1,'Первый',1978)});s2.addFolder(r);legacyParts(s2,paths,['m1']);s2.state.files[paths[1].toLowerCase()].forceReview=true;await s2.scanAll();e=Object.values(s2.state.files)[0];assert.equal(e.state,'orphan');assert.equal(e.forceReview,true);
+});
+
+test('реальная массовая потеря фильмов остаётся защищённой при объединении частей DVD',async()=>{
+  const r=tmp(),paths=flatDvd(path.join(r,'DVD'),12);const s=svc();s.addFolder(r);legacyParts(s,paths);
+  for(let i=0;i<12;i++){const p=path.join(r,`Пропал ${i}.mkv`);s.state.files[p.toLowerCase()]={id:p.toLowerCase(),path:p,kind:'file',state:'orphan',size:MIN_FILM_BYTES+1};}
+  await s.scanAll();assert.equal(s.state.folders[0].status,'suspicious');assert.equal(Object.values(s.state.lost)[0].count,12);assert.equal(Object.keys(s.state.files).length,24);
+});
+
+test('добавленная VIDEO_TS распознаётся как DVD и не предлагается к переименованию',async()=>{
+  const parent=path.join(tmp(),'Фильм (2000)'),r=path.join(parent,'VIDEO_TS');flatDvd(r,2);const s=svc({m1:film(1,'Другое название',2000,{altTitles:['Фильм']})});s.addFolder(r);await s.scanAll();
+  const e=Object.values(s.state.files)[0];assert.equal(e.kind,'dvd');assert.equal(e.title,'Фильм');assert.equal(e.internalDiscRoot,true);assert.equal(e.filmKey,'m1');assert.equal(s.renamePlan().length,0);assert.ok(fs.existsSync(r));
+});
+
+test('смена старой папки/ошибочного сериала на DVD сбрасывает сведения части, сохраняя решения',async()=>{
+  for(const kind of ['folder','series']){
+    const r=tmp(),dvd=path.join(r,'Первый');flatDvd(dvd,1);const s=svc({m1:film(1,'Первый',1978)});s.addFolder(r);
+    const id=dvd.toLowerCase();s.state.files={[id]:{id,path:dvd,title:'Первый',size:MIN_FILM_BYTES+1,mtime:fs.statSync(dvd).mtimeMs,kind,filmKey:'m1',state:'linked',matchMethod:'manual',duration:22,probed:true,subs:{state:'ru',langs:['ru']},renamePreference:'keep'}};
+    await s.scanAll();const e=Object.values(s.state.files)[0];assert.equal(e.kind,'dvd');assert.equal(e.filmKey,'m1');assert.equal(e.duration,null);assert.equal(e.renamePreference,'keep');assert.equal(e.dvdPartHistory.length,1);
+  }
+});

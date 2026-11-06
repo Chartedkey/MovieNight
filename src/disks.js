@@ -50,6 +50,19 @@ function matchEntry(state, idx, e) {
   return hits.length > 1 ? { candidates: hits.map((f) => f.key) } : {};
 }
 
+// Keep old per-part decisions when a flattened DVD becomes one folder entry.
+function mergedDvdState(previous, films) {
+  const links = [...new Set(previous.map(e=>e.filmKey).filter(k=>films[k]))];
+  const history = previous.map(e=>({...e}));
+  if (previous.length && previous.every(e=>e.state==='ignored')) return { state:'ignored', dvdPartHistory:history };
+  if (previous.some(e=>e.forceReview) || links.length>1) return { state:'orphan',forceReview:true,candidates:links,dvdPartHistory:history };
+  if (links.length===1) {
+    const linked=previous.find(e=>e.filmKey===links[0]);
+    return { state:'linked',filmKey:links[0],matchMethod:linked.matchMethod || 'unknown',dvdPartHistory:history };
+  }
+  return { state:null,dvdPartHistory:history };
+}
+
 // Подмешивается в Service: хранит файлы, связи и задачи.
 const diskMethods = {
   folders() { return this.state.folders || (this.state.folders = []); },
@@ -116,9 +129,22 @@ const diskMethods = {
     const prev = Object.entries(this.entries()).filter(([k]) => inFolder(k, prefix));
     const seen = new Set(res.entries.map((e) => idOf(e.path)));
     const missing = prev.filter(([k]) => !seen.has(k));
-    if (folder.role !== 'today' && prev.length >= LOST_MIN && missing.length >= prev.length * LOST_SHARE) {
+    const dvdGroups = new Map();
+    const covered = new Set();
+    for (const e of res.entries.filter(e=>e.kind==='dvd')) {
+      const parts = new Set((e.dvdParts||[]).map(idOf));
+      const children = prev.filter(([k,old])=>old.kind==='file' && parts.has(k));
+      children.forEach(([k])=>covered.add(k));
+      const oldRoot = this.entries()[idOf(e.path)];
+      const promoted = oldRoot && ['folder','parts','series'].includes(oldRoot.kind) ? [oldRoot] : [];
+      if (children.length || promoted.length) dvdGroups.set(idOf(e.path),mergedDvdState([...promoted,...children.map(([,old])=>old)],this.state.films));
+    }
+    const actuallyMissing = missing.filter(([k])=>!covered.has(k));
+    const groupedUnits = [...dvdGroups.keys()].filter(k=>!this.entries()[k]).length;
+    const previousUnits = prev.length-covered.size+groupedUnits;
+    if (folder.role !== 'today' && previousUnits >= LOST_MIN && actuallyMissing.length >= previousUnits * LOST_SHARE) {
       folder.status = 'suspicious';
-      this.flagLost(folder, missing.length, 'пропала большая часть фильмов');
+      this.flagLost(folder, actuallyMissing.length, 'пропала большая часть фильмов');
       return;
     }
     this.state.scan.errors.push(...res.errors);
@@ -126,12 +152,16 @@ const diskMethods = {
     folder.scannedAt = new Date().toISOString();
     folder.count = res.entries.length;
     delete (this.state.lost || {})[prefix];
-    missing.forEach(([k, e]) => { this.graveyard = this.graveyard || new Map(); if (e.filmKey) this.graveyard.set(fileKey(e), e); delete this.entries()[k]; });
+    missing.forEach(([k, e]) => { this.graveyard = this.graveyard || new Map(); if (e.filmKey && !covered.has(k)) this.graveyard.set(fileKey(e), e); delete this.entries()[k]; });
     res.entries.forEach((e) => {
       const id = idOf(e.path);
       const old = this.entries()[id];
-      const same = old && old.size === e.size && old.mtime === e.mtime;
+      const same = old && old.kind === e.kind && old.mainSet === e.mainSet && old.size === e.size && old.mtime === e.mtime;
       this.entries()[id] = same ? { ...old, ...e, duration: old.duration, subs: old.subs, probed: old.probed, filmKey: old.filmKey, state: old.state, candidates: old.candidates, matchMethod: old.matchMethod, forceReview: old.forceReview } : { ...e, id, role: folder.role, probed: false, state: null, renamePreference: old?.renamePreference, customName: old?.customName };
+      if (dvdGroups.has(id)) {
+        const previous = old?.kind==='dvd' ? mergedDvdState([old,...dvdGroups.get(id).dvdPartHistory],this.state.films) : dvdGroups.get(id);
+        Object.assign(this.entries()[id],previous,{probed:false,duration:null,subs:null});
+      }
       this.entries()[id].id = id;
       this.entries()[id].role = folder.role;
     });
@@ -304,7 +334,7 @@ const diskMethods = {
   renamePlan() {
     const plan = [];
     Object.values(this.entries()).forEach((e) => {
-      if (e.state !== 'linked' || e.role === 'exclude' || e.renamePreference === 'keep') return;
+      if (e.state !== 'linked' || e.role === 'exclude' || e.renamePreference === 'keep' || e.internalDiscRoot) return;
       const f = this.state.films[e.filmKey];
       if (!f || (!f.year && e.renamePreference !== 'custom')) return;
       const base = renameTitle(f, e);
