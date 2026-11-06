@@ -306,3 +306,40 @@ test('сортировка библиотеки и ручная фамилия �
   assert.throws(()=>r.setLibrarySort('random'),/порядок/);
   const before=JSON.stringify(r.state);assert.throws(()=>r.setDirectorName(10,'Новое','X'.repeat(151)),/Фамилия/);assert.equal(JSON.stringify(r.state),before);
 });
+
+test('хочу: добавление омонима не связывает текущий файл и не меняет очередь', async()=>{
+  const s=await imported();s.state.files={x:{id:'x',title:'Свидетель',path:'/test/Свидетель.mkv',state:'orphan',candidates:['m4']}};
+  const before=JSON.stringify({files:s.state.files,near:s.state.near,films:s.state.films});
+  await s.addWish(5);await s.addWish(5);
+  assert.equal(s.state.films.m5.wish,true);assert.equal(s.state.films.m5.status,'candidate');
+  const existing={...s.state.films};delete existing.m5;
+  assert.equal(JSON.stringify({files:s.state.files,near:s.state.near,films:existing}),before);
+  assert.equal(s.state.films.m5.userTitle,null,'имя текущего файла не переносится в желание');
+  const restored=new Service({dir:s.dir});assert.equal(restored.state.films.m5.wish,true);
+  const snapshot=JSON.stringify(restored.state);restored.setWish('m5',false);
+  const expected=JSON.parse(snapshot);expected.films.m5.wish=false;assert.deepEqual(restored.state,expected);
+});
+
+test('хочу: существующие оценки, разметка и активная очередь сохраняются',async()=>{
+  const s=await imported();s.state.films.m1.rating=9;s.state.films.m1.nightTags={weight:'light'};
+  const before=JSON.parse(JSON.stringify(s.state));await s.addWish(1);before.films.m1.wish=true;assert.deepEqual(s.state,before);
+  s.setFilmStatus('m1','watched');await assert.rejects(s.addWish(1),/Пересмотреть/);
+});
+
+test('из хочу в ближайшие: подтверждение заполненной очереди и повтор без дубля',async()=>{
+  const s=await imported();await s.addWish(8);s.removeNear('m8');
+  for(const k of ['m1','m2','m8'])s.state.films[k].status='queue';
+  const d=await s.detail(9);s.ensureFilm(d,{status:'candidate'});s.setWish('m9',true);
+  await assert.rejects(s.addFilm(9,{near:true}),/3 фильма/);
+  assert.ok(!s.state.near.some(e=>e.ids.includes('m9')));assert.equal(s.state.films.m9.wish,true);
+  await s.addFilm(9,{near:true,allowExtra:true});await s.addFilm(9,{near:true});
+  assert.equal(s.state.films.m9.status,'queue');assert.equal(s.state.films.m9.wish,true);
+  assert.equal(s.state.near.filter(e=>e.ids.includes('m9')).length,1);
+  s.removeNear('m9');assert.equal(s.state.films.m9.wish,true);
+});
+
+test('сохранённое желание можно отправить в ближайшие без повторного запроса TMDB',async()=>{
+  const s=await imported();await s.addWish(9);s.tmdb=null;s.details.clear();
+  await s.addFilm(9,{near:true,allowExtra:true});assert.equal(s.state.films.m9.status,'queue');assert.ok(s.state.near.some(e=>e.ids.includes('m9')));
+  s.removeNear('m9');s.setFilmStatus('m9','watched');assert.equal(s.state.films.m9.wish,true);
+});

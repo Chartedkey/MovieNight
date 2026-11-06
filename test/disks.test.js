@@ -646,3 +646,57 @@ test('алфавит библиотеки: Ё, латиница, иерогли�
   assert.equal(r.run("directorLetter({name:'Ларс фон Триер',sortSurname:'фон Триер'})"),'Ф');
   assert.equal(r.run("directorLetter({name:'Цзя Чжанкэ',sortSurname:'Цзя'})"),'Ц');
 });
+
+test('в ближайшие из разбора связывает выбранный файл, сохраняя другое желание',async()=>{
+  const s=svc({m1:film(1,'Первый',2001)});s.state.files={x:{id:'x',path:'/test/Первый.mkv',title:'Первый',state:'orphan'}};
+  s.tmdb=fakeTmdb([{id:1,title:'Первый',year:2001,directors:[[1,'Режиссёр']]},{id:900,title:'Новый',year:2001,directors:[[9,'Р']]}]);
+  await s.addWish(900);assert.equal(s.state.files.x.state,'orphan');
+  await s.addEntryFilm('x',1,'queue',{near:true});
+  assert.equal(s.state.files.x.filmKey,'m1');assert.equal(s.state.files.x.matchMethod,'manual');
+  assert.equal(s.state.near.filter(e=>e.ids.includes('m1')).length,1);assert.equal(s.state.films.m900.wish,true);
+  assert.equal(s.state.films.m900.userTitle,null);
+});
+
+test('в ближайшие из разбора: переполненная очередь ждёт подтверждения до связи файла',async()=>{
+  const s=svc({m1:film(1,'Первый',2001,{dir:9}),m2:film(2,'Второй',2002,{dir:9}),m3:film(3,'Третий',2003,{dir:9})});
+  s.state.directors[9]={id:9,name:'Р'};s.state.files={x:{id:'x',path:'/test/Новый.mkv',title:'Новый',state:'orphan'}};
+  await assert.rejects(s.addEntryFilm('x',900,'queue',{near:true}),/3 фильма/);
+  assert.equal(s.state.files.x.state,'orphan');assert.equal(s.state.files.x.filmKey,undefined);assert.equal(s.state.near.length,0);
+  await s.addEntryFilm('x',900,'queue',{near:true,replaceKey:'m2'});
+  assert.equal(s.state.files.x.filmKey,'m900');assert.equal(s.state.films.m2.status,'disk');assert.ok(s.state.near.some(e=>e.ids.includes('m900')));
+});
+
+test('скачанный фильм из хочу получает реальную связь после сканирования',async()=>{
+  const r=tmp();big(path.join(r,'Новый (2001).mkv'));
+  const s=svc();await s.addWish(900);s.addFolder(r);await s.scanAll();
+  assert.equal(s.state.films.m900.wish,true);assert.equal(s.state.films.m900.status,'candidate');
+  assert.equal(s.filmEntries('m900').length,1);assert.equal(s.filmEntries('m900')[0].state,'linked');
+});
+
+test('список хочу объединяет старые отметки и скрывает ближайшие/просмотренные',()=>{
+  const r=orphanRenderer(async()=>{});r.run(`ui.files=new Map();ui.state.near=[{ids:['m2']}];ui.state.folders=[];ui.state.directors={1:{id:1,name:'Режиссёр'}};ui.state.films={m1:{key:'m1',tmdbId:1,dir:1,status:'candidate',wish:true,userTitle:'Желание'},m2:{key:'m2',tmdbId:2,dir:1,status:'queue',wish:true},m3:{key:'m3',status:'watched',wish:true},m4:{key:'m4',status:'dropped',wish:true}};`);
+  assert.equal(r.run('wishList().map(f=>f.key).join()'),'m1');assert.match(r.run('wishlist()'),/Желание/);
+  assert.match(r.run('wishlist()'),/Скачал — найти на диске/);
+  r.run('ui.state.near=[]');assert.equal(r.run('wishList().length'),2);
+  r.run('ui.state.files.f={id:"f",filmKey:"m1",state:"linked"};ui.files=fileIndex()');
+  assert.doesNotMatch(r.run('wishlist().split("Желание")[1].split("<section")[0]'),/Скачал — найти на диске/);
+});
+
+test('разбор: хочу сохраняет вариант без связи; ближайшие передают флаг через предупреждение',async()=>{
+  const calls=[];const r=orphanRenderer(async(method,...args)=>{calls.push([method,...args]);return {films:{},directors:{},files:{},near:[]};});
+  await r.run('saveWish(900)');assert.equal(calls[0][0],'addWish');assert.equal(calls[0][1],900);assert.equal(calls.length,1);
+  r.run(`ui.candInfo[900]={directorIds:[9],directors:['Р']};ui.state.films={a:{key:'a',dir:9,status:'queue'},b:{key:'b',dir:9,status:'queue'},c:{key:'c',dir:9,status:'queue'}};`);
+  await r.run("requestQueueAdd(900,'file',true)");assert.equal(r.run('ui.modal.near'),true);assert.equal(r.run('ui.modal.entryId'),'file');
+  await r.run("applyQueueAdd(900,'file',{allowExtra:true,near:true})");assert.equal(calls[1][0],'addEntryFilm');assert.equal(calls[1][4].near,true);
+});
+
+test('связь файла с желанием и ближайшими работает без сети и сохраняет название',async()=>{
+  const s=svc();await s.addWish(900);s.tmdb=null;s.details.clear();s.state.files={x:{id:'x',title:'Release.Raw.2001.BDRip',path:'/test/raw.mkv',state:'orphan'}};
+  await s.addEntryFilm('x',900,'queue',{near:true});assert.equal(s.state.files.x.filmKey,'m900');assert.equal(s.state.films.m900.userTitle,null);assert.equal(s.state.films.m900.tmdbTitle,'Новый');
+});
+
+test('проверка скачивания не подтверждает наличие по записи с недоступного диска',async()=>{
+  const r=orphanRenderer(async()=>{});
+  r.run(`ui.state={files:{x:{id:'x',filmKey:'m1',state:'linked',path:'/offline/film.mkv'}},films:{m1:{key:'m1'}},directors:{},folders:[{path:'/offline',role:'normal',status:'offline'}]};runScan=async()=>true;`);
+  await r.run("checkWishDownload('m1')");assert.match(r.run('ui.toast'),/не подтверждён/);
+});

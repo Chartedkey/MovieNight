@@ -2,7 +2,7 @@
 const $app = document.getElementById('app');
 const bridge = window.api || { call: async () => { throw new Error('Не загрузился мост к программе (preload).'); }, onProgress() {}, onUpdate() {} };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const ui = { screen: 'library', libraryLetter: 'all', libraryNeeds: false, q: '', shown: 40, modal: null, menu: null, toast: null, progress: null, version: '', update: null, reviewQ: {}, reviewResults: {}, busy: false, error: null, hasKey: false, state: null, review: [], reviewShown: 12, reviewPeople: {}, reviewNote: {}, candInfo: {}, candLoading: false, rescue: null, diskTab: 'folders', scan: null, orphanSearch: {}, orphanQ: {}, orphanShown: 12, dups: [], plan: [], planFailed: [] };
+const ui = { screen: 'library', libraryLetter: 'all', libraryNeeds: false, q: '', wishQ: '', wishShown: 40, shown: 40, modal: null, menu: null, toast: null, progress: null, version: '', update: null, reviewQ: {}, reviewResults: {}, busy: false, error: null, hasKey: false, state: null, review: [], reviewShown: 12, reviewPeople: {}, reviewNote: {}, candInfo: {}, candLoading: false, rescue: null, diskTab: 'folders', scan: null, orphanSearch: {}, orphanQ: {}, orphanShown: 12, dups: [], plan: [], planFailed: [] };
 const actions = {};
 let actionSeq = 0;
 
@@ -94,7 +94,7 @@ function navHtml() {
   const films = Object.values(s.films);
   const review = ui.review.length;
   const pending = films.filter((f) => f.pending || f.moveTask).length + (s.nights||[]).reduce((sum,n)=>sum+n.slots.filter(x=>!x.result).length,0);
-  const items = [['library', 'Библиотека', 0], ...(review ? [['review', 'Спорные строки', review]] : []), ['near', 'Ближайшие', s.near.length], ['rewatch', 'Пересмотреть', films.filter((f) => f.rewatch).length], ['morning', 'Утренний разбор', pending], ['download', 'Скачать', downloadList().length], ['disks', 'Диски', allEntries().filter((e) => e.state === 'orphan').length + Object.keys(s.lost || {}).length], ['night', 'Собрать ночь', 0]];
+  const items = [['library', 'Библиотека', 0], ...(review ? [['review', 'Спорные строки', review]] : []), ['near', 'Ближайшие', s.near.length], ['wishlist', 'Хочу посмотреть', wishList().length], ['rewatch', 'Пересмотреть', films.filter((f) => f.rewatch).length], ['morning', 'Утренний разбор', pending], ['download', 'Скачать', downloadList().length], ['disks', 'Диски', allEntries().filter((e) => e.state === 'orphan').length + Object.keys(s.lost || {}).length], ['night', 'Собрать ночь', 0]];
   return `<nav class="side" aria-label="Разделы"><img class="logo" src="logo.png" alt="Movie Night">${items.map((n) => `<button class="nav ${ui.screen === n[0] ? 'on' : ''}" ${n[3] ? 'disabled title="Следующий этап"' : ''} data-a="${on(async () => { ui.screen = n[0]; if (n[0] === 'review') ui.review = await call('reviewList'); render(); if (n[0] === 'review') loadCandInfo(); if (n[0] === 'disks') loadDiskExtras(); })}"><span>${n[1]}</span>${n[2] ? `<span class="badge">${n[2]}</span>` : n[3] ? '<span class="sub" style="font-size:11px">скоро</span>' : ''}</button>`).join('')}<div class="ver">Версия ${esc(ui.version)}${ui.update ? `<br>${ui.update.state === 'ready' ? `<button class="mini on" data-a="${on(() => call('installUpdate'))}">Установить ${esc(ui.update.version)}</button>` : `Загружается ${esc(ui.update.version)}`}` : ''}</div></nav>`;
 }
 
@@ -114,7 +114,7 @@ function nearDirectorSummary(id, exclude = null) {
 }
 
 function filmRow(f, extra = '') {
-  return `<div class="film" data-film="${f.key}"><div class="fwrap">${posterHtml(f.poster)}<div><div class="ftitle">${filmLine(f)}</div><div class="fmeta">${filmMeta(f)}</div></div></div><div class="row">${nearFilmTag(f)}${diskTags(f)}${extra}<button class="mini" aria-label="Ещё действия" data-menu="${f.key}">Ещё</button></div></div>`;
+  return `<div class="film" data-film="${f.key}"><div class="fwrap">${posterHtml(f.poster)}<div><div class="ftitle">${filmLine(f)}</div><div class="fmeta">${filmMeta(f)}</div></div></div><div class="row">${nearFilmTag(f)}${f.wish&&!isNear(f.key)&&!['watched','dropped'].includes(f.status)?'<span class="tag gold">Хочу посмотреть</span>':''}${diskTags(f)}${extra}<button class="mini" aria-label="Ещё действия" data-menu="${f.key}">Ещё</button></div></div>`;
 }
 
 function directorSortKey(d) {
@@ -179,6 +179,24 @@ function morning() {
     return `<section class="card"><div class="fwrap">${posterHtml(f.poster, true)}<div><h2>${filmLine(f)}</h2><div class="sub">${f.status === 'dropped' ? 'Брошен' : 'Посмотрен'} · ${esc((ui.state.directors[f.dir] || {}).name || '')}</div></div></div>${f.pending ? `<div class="row" style="gap:4px" aria-label="Оценка">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => `<button class="mini ${f.rating === n ? 'on' : ''}" data-a="${on(() => doState('rate', f.key, n))}">${n}</button>`).join('')}</div><div class="row"><button class="mini ${f.rewatch ? 'on' : ''}" data-a="${on(() => doState('toggleRewatch', f.key))}">В «Пересмотреть»</button><button class="btn ${f.moveTask ? '' : 'primary'}" data-a="${on(() => doState('finishReview', f.key))}">Оценка готова</button></div>` : ''}${f.moveTask ? `<div class="label">Перенеси на резервный диск и удали отсюда${paths.length > 1 ? `. Копий: ${paths.length}` : ''}</div>${paths.map((e) => `<div class="film"><div class="path">${esc(e.path)}<br>${gb(e.size)}</div><button class="mini" data-a="${on(() => call('openEntry', e.id))}">Открыть папку</button></div>`).join('')}<div class="row"><button class="mini" data-a="${on(() => doState('keepOnDisk', f.key))}">Оставить на диске</button><button class="mini" data-a="${on(() => runScan())}">Я перенёс, проверить</button></div>` : ''}</section>`;
   }).join('');
   return `<div class="head"><div><h1>Утренний разбор</h1><div class="sub">Задача на перенос закроется сама, когда файла не останется ни в одной папке.</div></div></div>${typeof nightMorning === 'function' ? nightMorning() : ''}${today}<div class="grid wide">${cards || (today ? '' : '<div class="card sub">Задач нет.</div>')}</div>`;
+}
+
+function isNear(key) { return (ui.state.near || []).some(e=>e.ids.includes(key)); }
+function wishList() {
+  return Object.values(ui.state.films).filter(f=>f.wish && !isNear(f.key) && !['watched','dropped'].includes(f.status)).sort((a,b)=>titleOf(a).localeCompare(titleOf(b),'ru') || String(a.key).localeCompare(String(b.key)));
+}
+async function checkWishDownload(key) {
+  if (!(ui.state.folders||[]).some(d=>d.role!=='exclude')) { say('Сначала добавь папку со скачанными фильмами в разделе «Диски».'); return; }
+  if (!await runScan()) return;
+  const matches = (fileIndex().get(key) || []).filter(e=>NightPlanner.fileIsAvailable(ui.state,e));
+  if (matches.length) say('Файл найден и связан с фильмом.');
+  else say('Файл на доступных дисках не подтверждён. Проверь папку или выбери фильм в «Нужно разобрать».', {label:'Открыть разбор',run:()=>{ui.screen='disks';ui.diskTab='orphans';render();loadOrphans();}});
+}
+function wishlist() {
+  const norm=x=>String(x||'').toLowerCase().replace(/ё/g,'е');
+  const q=norm(ui.wishQ).trim();
+  const list=wishList().filter(f=>!q||[titleOf(f),f.originalTitle,...directorNames(ui.state.directors[f.dir]||{})].some(n=>norm(n).includes(q)));
+  return `<div class="head"><div><h1>Хочу посмотреть</h1><div class="sub">Фильмов: ${list.length}. Здесь и отметки «Хочу» из фильмографии. Выбери, что отправить в «Ближайшие», остальное останется на потом.</div></div></div><div class="sub">После добавления в «Ближайшие» фильм скрывается из этого списка. Если убрать его из ближайших, он вернётся сюда. Просмотренные и брошенные здесь не показываются.</div><input id="wishq" class="field" aria-label="Поиск в списке хочу" placeholder="Фильм или режиссёр" value="${esc(ui.wishQ)}"><div class="grid wide">${list.slice(0,ui.wishShown).map(f=>`<section class="card">${filmRow(f)}<div class="sub">${esc((ui.state.directors[f.dir]||{}).name||'')}</div>${f.overview?`<div class="sub">${esc(f.overview)}</div>`:''}<div class="row"><button class="mini on" data-a="${on(()=>requestQueueAdd(f.tmdbId,null,true))}">В ближайшие</button><button class="mini" data-a="${on(()=>call('openExternal',f.kpLink||kpSearch(f)))}">Кинопоиск</button><button class="mini" data-a="${on(()=>call('openExternal',`https://www.themoviedb.org/movie/${f.tmdbId}`))}">TMDB</button><button class="mini" ${ui.scan?'disabled':''} data-a="${on(()=>checkWishDownload(f.key))}">${(ui.files.get(f.key)||[]).length?'Проверить на диске':'Скачал — найти на диске'}</button><button class="mini" data-a="${on(()=>doState('setWish',f.key,false))}">Убрать из «Хочу»</button></div></section>`).join('')||(q?'<div class="card sub">По этому запросу фильмов нет.</div>':'<div class="card sub">Список пуст. Добавляй фильмы кнопкой «Хочу посмотреть» в разборе или отметкой «Хочу» в фильмографии.</div>')}</div>${list.length>ui.wishShown?`<button class="btn" data-a="${on(()=>{ui.wishShown+=40;render();})}">Показать ещё</button>`:''}`;
 }
 
 function downloadList() {
@@ -319,23 +337,34 @@ function queueContext(tmdbId) {
   if (!q) return '<div class="sub">Очередь режиссёра пока не определена.</div>';
   return `<div class="sub" style="margin-top:8px">${esc(q.name)} · в очереди: ${q.films.length}${q.films.length ? `<br>${q.films.map((f) => esc(titleOf(f))).join(' · ')}` : '<br>Пока нет выбранных фильмов.'}</div>${q.films.length >= 3 ? '<div class="sub warn">В очереди уже 3 фильма или больше. Можно добавить ещё один или заменить выбранный.</div>' : ''}`;
 }
-async function requestQueueAdd(tmdbId, entryId = null) {
+async function requestQueueAdd(tmdbId, entryId = null, near = false) {
   if (!directorQueue(tmdbId)) Object.assign(ui.candInfo, await call('candidateInfo', [tmdbId]));
   const q = directorQueue(tmdbId);
   if (!q) { say('Не удалось определить режиссёра. Попробуй загрузить сведения ещё раз.'); return; }
   const f = ui.state.films[`m${tmdbId}`];
   if (q.films.length >= 3 && (!f || f.status !== 'queue')) {
-    ui.modal = { type: 'queue', tmdbId, entryId };
+    ui.modal = { type: 'queue', tmdbId, entryId, near };
     render();
     return;
   }
-  await applyQueueAdd(tmdbId, entryId);
+  await applyQueueAdd(tmdbId, entryId, { near });
 }
 async function applyQueueAdd(tmdbId, entryId, options = {}) {
   if (entryId != null) await doState('addEntryFilm', entryId, tmdbId, 'queue', options);
   else await doState('addFilm', tmdbId, options);
   ui.modal = null;
   render();
+}
+
+async function saveWish(tmdbId) {
+  await doState('addWish',tmdbId);
+  say('Фильм сохранён в «Хочу посмотреть». Текущий файл не связан и остаётся в разборе.');
+}
+function orphanWantActions(tmdbId, entryId) {
+  const f=ui.state.films[`m${tmdbId}`];
+  if(f && ['watched','dropped'].includes(f.status)) return '';
+  const nearAllowed=!f || !['watched','dropped'].includes(f.status);
+  return `${nearAllowed?`<button class="mini on" title="Подтвердить фильм для этого файла и добавить в ближайший просмотр" data-a="${on(()=>requestQueueAdd(tmdbId,entryId,true))}">${f&&isNear(f.key)?'Уже в ближайших — связать файл':'В ближайшие'}</button>`:''}<button class="mini" title="Сохранить фильм на потом без привязки текущего файла" ${f&&f.wish?'disabled':''} data-a="${on(()=>saveWish(tmdbId))}">${f&&f.wish?'В списке «Хочу»':'Хочу посмотреть'}</button>`;
 }
 
 function knownFilmTag(f) {
@@ -351,9 +380,9 @@ function orphanCard(e) {
     const i = ui.candInfo[c.id];
     const known = ui.state.films[`m${c.id}`];
     const canQueue = !known || ['disk', 'reserve', 'candidate'].includes(known.status);
-    return `<div class="film choice"><div class="fwrap">${posterHtml(i && i.poster)}<div style="min-width:0"><div class="ftitle">${esc(c.title)}${c.year ? ` (${c.year})` : ''}</div>${knownFilmTag(known)}<div class="fmeta">${esc(c.originalTitle || '')}</div><div class="fmeta">${esc(i ? [i.directors.join(', '), i.runtime ? `${i.runtime} мин` : null].filter(Boolean).join(' · ') : '')}</div>${queueContext(c.id)}</div></div><div class="col2">${known ? `<button class="mini on" data-a="${on(() => doState('chooseEntryFilm', e.id, known.key))}">Это он — связать файл</button>` : ''}${canQueue ? `<button class="mini on" data-a="${on(() => requestQueueAdd(c.id, e.id))}">Добавить в очередь</button>` : ''}${!known ? `<button class="mini" title="Запомнить фильм и его файлы без добавления в очередь просмотра" data-a="${on(() => doState('addEntryFilm', e.id, c.id, 'disk'))}">Только учитывать на диске</button>` : ''}${!known || !['watched', 'dropped'].includes(known.status) ? `<button class="mini" data-a="${on(() => doState('addEntryFilm', e.id, c.id, true))}">Уже смотрел</button>` : ''}</div></div>`;
+    return `<div class="film choice"><div class="fwrap">${posterHtml(i && i.poster)}<div style="min-width:0"><div class="ftitle">${esc(c.title)}${c.year ? ` (${c.year})` : ''}</div>${knownFilmTag(known)}${known?nearFilmTag(known):''}<div class="fmeta">${esc(c.originalTitle || '')}</div><div class="fmeta">${esc(i ? [i.directors.join(', '), i.runtime ? `${i.runtime} мин` : null].filter(Boolean).join(' · ') : '')}</div>${queueContext(c.id)}</div></div><div class="col2">${orphanWantActions(c.id,e.id)}${known ? `<button class="mini on" data-a="${on(() => doState('chooseEntryFilm', e.id, known.key))}">Это он — связать файл</button>` : ''}${canQueue ? `<button class="mini on" data-a="${on(() => requestQueueAdd(c.id, e.id))}">Добавить в очередь</button>` : ''}${!known ? `<button class="mini" title="Запомнить фильм и его файлы без добавления в очередь просмотра" data-a="${on(() => doState('addEntryFilm', e.id, c.id, 'disk'))}">Только учитывать на диске</button>` : ''}${!known || !['watched', 'dropped'].includes(known.status) ? `<button class="mini" data-a="${on(() => doState('addEntryFilm', e.id, c.id, true))}">Уже смотрел</button>` : ''}</div></div>`;
   };
-  return `<section class="card"><div><h2>${esc(e.title)}${e.year ? ` (${e.year})` : ''}</h2><div class="path">${esc(e.path)}</div><div class="sub">${kindName[e.kind] || ''} · ${gb(e.size)}${e.duration ? ` · ${e.duration} мин` : ''}</div></div>${mine.length ? `<div class="sub warn">Совпало с несколькими фильмами списка:</div>${mine.map((f) => `<div class="film"><div class="fwrap">${posterHtml(f.poster)}<div class="ftitle">${filmLine(f)}${knownFilmTag(f)}<div class="fmeta">${esc((ui.state.directors[f.dir] || {}).name || '')}${f.runtime ? ` · ${f.runtime} мин` : ''}</div></div></div><button class="mini on" data-a="${on(() => doState('chooseEntryFilm', e.id, f.key))}">Это он</button></div>`).join('')}` : ''}<div class="list">${found.map(candRow).join('') || (mine.length ? '' : `<div class="sub">${ui.orphanErrors && ui.orphanErrors[e.id] ? 'Загрузка не завершена.' : ui.orphanSearch[e.id] ? 'Вариантов не найдено. Попробуй другое название или ссылку TMDB.' : 'Ищу варианты…'}</div>`)}</div>${ui.orphanErrors && ui.orphanErrors[e.id] ? `<div class="sub warn">${esc(ui.orphanErrors[e.id])}</div><button class="mini" data-a="${on(() => retryOrphan(e.id))}">Повторить загрузку</button>` : ''}<div class="row"><input class="field" id="orp${esc(e.id)}" data-orpq="${esc(e.id)}" aria-label="Поиск в TMDB" placeholder="Название, режиссёр или ссылка TMDB" value="${esc(ui.orphanQ[e.id] || '')}"><button class="btn" data-a="${on(async () => { await searchOrphan(e); })}">Найти</button><button class="btn ghost" data-a="${on(() => call('openEntry', e.id))}">Открыть папку</button><button class="btn ghost" data-a="${on(() => ignoreFile(e.id))}">Игнорировать</button></div></section>`;
+  return `<section class="card"><div><h2>${esc(e.title)}${e.year ? ` (${e.year})` : ''}</h2><div class="path">${esc(e.path)}</div><div class="sub">${kindName[e.kind] || ''} · ${gb(e.size)}${e.duration ? ` · ${e.duration} мин` : ''}</div></div>${mine.length ? `<div class="sub warn">Совпало с несколькими фильмами списка:</div>${mine.map((f) => `<div class="film"><div class="fwrap">${posterHtml(f.poster)}<div class="ftitle">${filmLine(f)}${knownFilmTag(f)}<div class="fmeta">${esc((ui.state.directors[f.dir] || {}).name || '')}${f.runtime ? ` · ${f.runtime} мин` : ''}</div></div></div><button class="mini on" data-a="${on(() => doState('chooseEntryFilm', e.id, f.key))}">Это он</button>${orphanWantActions(f.tmdbId,e.id)}</div>`).join('')}` : ''}<div class="list">${found.map(candRow).join('') || (mine.length ? '' : `<div class="sub">${ui.orphanErrors && ui.orphanErrors[e.id] ? 'Загрузка не завершена.' : ui.orphanSearch[e.id] ? 'Вариантов не найдено. Попробуй другое название или ссылку TMDB.' : 'Ищу варианты…'}</div>`)}</div>${ui.orphanErrors && ui.orphanErrors[e.id] ? `<div class="sub warn">${esc(ui.orphanErrors[e.id])}</div><button class="mini" data-a="${on(() => retryOrphan(e.id))}">Повторить загрузку</button>` : ''}<div class="row"><input class="field" id="orp${esc(e.id)}" data-orpq="${esc(e.id)}" aria-label="Поиск в TMDB" placeholder="Название, режиссёр или ссылка TMDB" value="${esc(ui.orphanQ[e.id] || '')}"><button class="btn" data-a="${on(async () => { await searchOrphan(e); })}">Найти</button><button class="btn ghost" data-a="${on(() => call('openEntry', e.id))}">Открыть папку</button><button class="btn ghost" data-a="${on(() => ignoreFile(e.id))}">Игнорировать</button></div></section>`;
 }
 async function restoreIgnored(id) {
   await doState('unignoreEntry', id);
@@ -396,7 +425,7 @@ function disks() {
     body = `<section class="card"><div class="row between"><h2>Папки с фильмами</h2><div class="row"><button class="btn primary" data-a="${on(() => pickAndAdd('normal'))}">Добавить папку</button><button class="btn" data-a="${on(() => pickAndAdd('exclude'))}">Исключить папку</button><button class="btn" ${ui.scan ? 'disabled' : ''} data-a="${on(() => runScan())}">Сканировать всё</button></div></div>${(s.folders || []).map((f) => `<div class="film"><div><div class="ftitle">${esc(f.path)}</div><div class="fmeta">${f.role === 'exclude' ? 'Программа сюда не заходит' : `${stat[f.status] || 'Ещё не сканирована'}${f.count != null ? ` · найдено: ${f.count}` : ''}`}</div></div><div class="row" style="gap:4px">${Object.keys(roleNames).map((r) => `<button class="mini ${f.role === r ? 'on' : ''}" data-a="${on(() => doState('setFolderRole', f.path, r))}">${roleNames[r]}</button>`).join('')}<button class="mini" ${ui.scan ? 'disabled' : ''} data-a="${on(() => runScan(f.path))}">Сканировать</button><button class="mini" data-a="${on(() => doState('removeFolder', f.path))}">Убрать</button></div></div>`).join('') || '<div class="sub">Подключай по одной папке, например U:\\Фильмы. Программа только читает их и ничего не меняет без твоего подтверждения.</div>'}<label class="row" style="margin-top:6px"><input type="checkbox" id="allconn" ${s.allConnected ? 'checked' : ''}><span class="sub">Подключены все диски: можно точно считать, что остальное нужно скачать</span></label></section>`;
   }
   if (ui.diskTab === 'orphans') {
-    body = `<div class="sub">Эти файлы пока не связаны с фильмами библиотеки. Выбери правильный фильм и действие: добавить в очередь или только учитывать на диске. Если фильм уже есть в библиотеке, кнопка «Это он» сохранит его очередь и отметки.</div><div class="grid wide">${orphans.slice(0, ui.orphanShown).map(orphanCard).join('') || '<div class="card sub">Всё сопоставлено.</div>'}</div>${orphans.length > ui.orphanShown ? `<button class="btn" data-a="${on(() => { ui.orphanShown += 12; render(); loadOrphans(); })}">Показать ещё</button>` : ''}`;
+    body = `<div class="sub">Эти файлы пока не связаны с фильмами библиотеки. Выбери правильный фильм и действие: добавить в очередь или только учитывать на диске. Если фильм уже есть в библиотеке, кнопка «Это он» сохранит его очередь и отметки. «В ближайшие» подтверждает фильм для этого файла и добавляет его в ближайший просмотр. «Хочу посмотреть» только сохраняет интересный вариант на потом — файл остаётся в разборе.</div><div class="grid wide">${orphans.slice(0, ui.orphanShown).map(orphanCard).join('') || '<div class="card sub">Всё сопоставлено.</div>'}</div>${orphans.length > ui.orphanShown ? `<button class="btn" data-a="${on(() => { ui.orphanShown += 12; render(); loadOrphans(); })}">Показать ещё</button>` : ''}`;
   }
   if (ui.diskTab === 'stored') {
     const stored = Object.values(s.films).filter((f) => f.status === 'disk');
@@ -519,10 +548,10 @@ function modal() {
   if (m.type === 'queue') {
     const q = directorQueue(m.tmdbId);
     title = 'Очередь режиссёра заполнена';
-    body = `${queueContext(m.tmdbId)}<div class="row"><button class="btn primary" data-a="${on(() => applyQueueAdd(m.tmdbId, m.entryId, { allowExtra: true }))}">Добавить ещё одним (${q.films.length + 1}-м)</button></div><h3>Или заменить фильм в очереди</h3><div class="sub">Заменённый фильм останется учтённым. Его файлы, оценки и отметки сохранятся.</div><div class="list">${q.films.map((f) => `<div class="film"><div class="ftitle">${esc(titleOf(f))}</div><button class="mini" data-a="${on(() => applyQueueAdd(m.tmdbId, m.entryId, { replaceKey: f.key }))}">Заменить этот</button></div>`).join('')}</div><button class="btn ghost" data-a="${on(async () => {
+    body = `${queueContext(m.tmdbId)}<div class="row"><button class="btn primary" data-a="${on(() => applyQueueAdd(m.tmdbId, m.entryId, { allowExtra: true, near: m.near }))}">Добавить ещё одним (${q.films.length + 1}-м)</button></div><h3>Или заменить фильм в очереди</h3><div class="sub">Заменённый фильм останется учтённым. Его файлы, оценки и отметки сохранятся.</div><div class="list">${q.films.map((f) => `<div class="film"><div class="ftitle">${esc(titleOf(f))}</div><button class="mini" data-a="${on(() => applyQueueAdd(m.tmdbId, m.entryId, { replaceKey: f.key, near: m.near }))}">Заменить этот</button></div>`).join('')}</div><button class="btn ghost" data-a="${on(async () => {
       if (m.entryId != null) await doState('addEntryFilm', m.entryId, m.tmdbId, 'disk');
       ui.modal = null; render();
-    })}">Только учитывать на диске</button>`;
+    })}">${m.entryId!=null?'Только учитывать на диске':m.near?'Оставить на потом':'Отложить'}</button>`;
   }
   if (m.type === 'loading') { title = m.title; body = '<div class="sub">Подожди немного.</div>'; }
   if (m.type === 'markup') {
@@ -556,7 +585,8 @@ function menu() {
   const inNear = ui.state.near.some((e) => e.ids.includes(f.key));
   const status = async (s) => { const r = await doState('setFilmStatus', f.key, s); if (r.askDirector != null) openDirector(r.askDirector); };
   const items = [
-    [inNear ? 'Убрать из ближайших' : 'Добавить на ближайший просмотр', () => doState(inNear ? 'removeNear' : 'addNear', f.key)],
+    [inNear ? 'Убрать из ближайших' : 'Добавить на ближайший просмотр', () => inNear ? doState('removeNear',f.key) : ['watched','dropped'].includes(f.status) ? doState('addNear',f.key) : requestQueueAdd(f.tmdbId,null,true)],
+    ...(!['watched','dropped'].includes(f.status) ? [[f.wish?'Убрать из «Хочу»':'Хочу посмотреть',()=>doState('setWish',f.key,!f.wish)]] : []),
     [f.rewatch ? 'Убрать из «Пересмотреть»' : 'Добавить в «Пересмотреть»', () => doState('toggleRewatch', f.key)],
     ['Посмотрел', () => status('watched')], ['Бросил', () => status('dropped')], ['Не нашёл', () => status('notfound')],
     ['Изменить название', () => { ui.menu = null; ui.modal = { type: 'rename', key: f.key }; render(); }],
@@ -600,7 +630,7 @@ function renderInner() {
   let html;
   if (gate) html = `<div class="main">${gate}</div>`;
   else {
-    const screens = { library, near, rewatch, morning, review, download, disks, night, 'night-prep': nightPrep };
+    const screens = { library, near, wishlist, rewatch, morning, review, download, disks, night, 'night-prep': nightPrep };
     html = navHtml() + `<main class="main">${(screens[ui.screen] || library)()}</main>`;
   }
   const mdl = ui.modal && ui.modal.type.startsWith('night-') ? nightModal() : ui.modal && ui.modal.type === 'rename' ? renameModal() : modal();
@@ -642,6 +672,7 @@ document.addEventListener('change', (e) => {
   if (key) doState('rate', key, e.target.value === '' ? null : Number(e.target.value)).catch(() => {});
 });
 document.addEventListener('input', (e) => {
+  if (e.target.id === 'wishq') { ui.wishQ=e.target.value;ui.wishShown=40;render(); }
   if (e.target.id === 'libq') { ui.q = e.target.value; ui.shown = 40; render(); }
   if (e.target.id === 'addq') ui.modal.q = e.target.value;
   if (e.target.dataset.orpq) ui.orphanQ[e.target.dataset.orpq] = e.target.value;

@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { randomUUID } = require('node:crypto');
 const { norm, yearOf, isConfident, searchFilm, rank } = require('./matcher');
 
 const SHORT_MINUTES = 40;
@@ -678,12 +679,30 @@ class Service {
   toggleFav(id) { const d = this.state.directors[id]; d.fav = !d.fav; this.save(); return this.state; }
   ban(id) { const d = this.state.directors[id]; d.banned = true; d.needsChoice = false; this.save(); return this.state; }
 
-  addNear(key) {
+  placeNear(key) {
     this.mustFilm(key);
-    if (!this.state.near.some((e) => e.ids.includes(key))) this.state.near.push({ key: `u${Date.now()}`, ids: [key], source: null });
+    if (!this.state.near.some((e) => e.ids.includes(key))) this.state.near.push({ key: `u${randomUUID()}`, ids: [key], source: null });
     this.state.nearTouched = true;
+  }
+
+  addNear(key) {
+    this.placeNear(key);
     this.save();
     return this.state;
+  }
+
+  setWish(key, value) {
+    if (typeof value !== 'boolean') throw new Error('Некорректная отметка «Хочу».');
+    const f = this.mustFilm(key);
+    if (value && ['watched', 'dropped'].includes(f.status)) throw new Error('Фильм уже просмотрен или брошен. Можно добавить его в «Пересмотреть».');
+    f.wish = value;
+    this.save(); return this.state;
+  }
+
+  async addWish(tmdbId) {
+    // A wish never identifies or links the file being reviewed.
+    const f = this.state.films[filmKey(tmdbId)] || this.ensureFilm(await this.detail(tmdbId), { status: 'candidate' });
+    return this.setWish(f.key, true);
   }
 
   removeNear(key) {
@@ -762,9 +781,10 @@ class Service {
   }
 
   async addFilm(tmdbId, options = {}) {
-    const det = await this.detail(tmdbId);
-    const f = this.ensureFilm(det, { status: 'disk' });
-    if (['candidate', 'disk', 'reserve'].includes(f.status)) this.enqueueFilm(f, options);
+    const f = this.state.films[filmKey(tmdbId)] || this.ensureFilm(await this.detail(tmdbId), { status: 'disk' });
+    if (options.near && ['watched', 'dropped'].includes(f.status)) throw new Error('Сначала верни фильм в очередь или разреши пересмотр.');
+    if (['candidate', 'disk', 'reserve'].includes(f.status) || (options.near && ['nointerest','notfound'].includes(f.status))) this.enqueueFilm(f, options);
+    if (options.near) this.placeNear(f.key);
     this.rebuildQueues();
     this.save();
     return { state: this.state, film: f };
