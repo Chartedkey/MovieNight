@@ -1,7 +1,7 @@
 {
   "name": "movie-night",
   "productName": "Movie Night",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Личный каталог фильмов: очереди по режиссёрам, диски и планирование киноночи",
   "main": "electron/main.js",
   "author": "Chartedkey",

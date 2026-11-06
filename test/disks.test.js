@@ -807,3 +807,38 @@ test('смена старой папки/ошибочного сериала н�
     await s.scanAll();const e=Object.values(s.state.files)[0];assert.equal(e.kind,'dvd');assert.equal(e.filmKey,'m1');assert.equal(e.duration,null);assert.equal(e.renamePreference,'keep');assert.equal(e.dvdPartHistory.length,1);
   }
 });
+
+test('DVD из сообщения: COVERS и меню VTS_01_0 не мешают объединению основного VTS_03',async()=>{
+  const root=path.join(tmp(),'Мнения сторон (2001)');
+  big(path.join(root,'VTS_01_0.VOB'),130*1024*1024);big(path.join(root,'VTS_01_1.VOB'),5*1024*1024);
+  for(let i=1;i<=5;i++)big(path.join(root,`VTS_03_${i}.VOB`),i===5?520*1024*1024:MIN_FILM_BYTES+1);
+  fs.mkdirSync(path.join(root,'COVERS'));fs.writeFileSync(path.join(root,'COVERS','cover.jpg'),'cover');
+  const es=(await scanFolder(root)).entries;assert.equal(es.length,1);assert.equal(es[0].kind,'dvd');assert.equal(es[0].title,'Мнения сторон');assert.equal(es[0].year,2001);assert.equal(es[0].mainSet,'03');assert.equal(es[0].dvdParts.length,7);
+});
+
+test('DVD с произвольными вложенными папками картинок/субтитров и коротким предпросмотром остаётся одним фильмом',async()=>{
+  const root=path.join(tmp(),'DVD');flatDvd(root,4);
+  fs.mkdirSync(path.join(root,'Материалы','Обложки'),{recursive:true});fs.writeFileSync(path.join(root,'Материалы','Обложки','front.jpg'),'cover');
+  fs.mkdirSync(path.join(root,'Subtitles'));fs.writeFileSync(path.join(root,'Subtitles','film.srt'),'subtitle');
+  big(path.join(root,'preview.mp4'),1024);
+  const es=(await scanFolder(root)).entries;assert.equal(es.length,1);assert.equal(es[0].kind,'dvd');assert.equal(es[0].mainSet,'05');
+});
+
+test('настоящий фильм в COVERS не скрывается и не становится частью DVD; VOB не превращаются в сериал',async()=>{
+  const r=tmp(),dvd=path.join(r,'DVD');flatDvd(dvd,4);const other=path.join(dvd,'COVERS','Другой фильм.mkv');big(other);
+  const es=(await scanFolder(r)).entries;assert.equal(es.filter(e=>e.kind==='file').length,4);assert.ok(es.some(e=>e.video===other));assert.ok(!es.some(e=>e.kind==='dvd'||e.kind==='series'));
+  for(const e of es.filter(e=>e.kind==='file')){assert.equal(e.dvdGroupingBlocker.reason,'video');assert.equal(e.dvdGroupingBlocker.path,other);}
+});
+
+test('объединение старых частей DVD с COVERS переносит ручную связь и убирает старые карточки после сканирования',async()=>{
+  const r=tmp(),dvd=path.join(r,'Мнения сторон (2001)'),paths=flatDvd(dvd,12);fs.mkdirSync(path.join(dvd,'COVERS'));fs.writeFileSync(path.join(dvd,'COVERS','cover.jpg'),'cover');
+  const s=svc({m1:film(1,'Мнения сторон',2001,{rating:8,wish:true})});s.addFolder(r);legacyParts(s,paths,paths.map(()=> 'm1'));
+  await s.scanAll();assert.equal(Object.keys(s.state.files).length,1);const e=s.filmEntries('m1')[0];assert.equal(e.kind,'dvd');assert.equal(e.year,2001);assert.equal(e.dvdPartHistory.length,12);assert.equal(e.matchMethod,'manual');assert.equal(s.state.folders[0].status,'ok');assert.equal(s.state.films.m1.rating,8);assert.ok(paths.every(p=>fs.existsSync(p)));
+  await s.scanAll();assert.equal(s.filmEntries('m1').length,1);assert.equal(s.filmEntries('m1')[0].dvdPartHistory.length,12);
+});
+
+test('при блокировке объединения DVD карточка объясняет причину и показывает соседнее видео',()=>{
+  const r=orphanRenderer(async()=>{});r.run("ui.state.near=[];ui.orphanSearch.x=[]");
+  const html=r.run(`orphanCard({id:'x',kind:'file',title:'VTS 03 1',path:'/films/VTS_03_1.VOB',size:1000000000,dvdGroupingBlocker:{reason:'video',path:'/films/COVERS/Другой фильм.mkv'}})`);
+  assert.match(html,/DVD не объединён/);assert.match(html,/COVERS\/Другой фильм.mkv/);
+});

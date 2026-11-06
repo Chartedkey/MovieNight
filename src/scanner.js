@@ -66,6 +66,32 @@ function sidecars(names) {
   return names.filter((n) => SUBS.has(path.extname(n).toLowerCase()));
 }
 
+// Auxiliary folders are allowed beside a DVD. Inspect their contents instead of
+// rejecting every unfamiliar directory name or grouping another movie silently.
+async function findSeparateVideo(dir, entries, ctx, ignoreDvdParts = false) {
+  for (const e of entries) {
+    if (!e.isFile() || !VIDEO.has(path.extname(e.name).toLowerCase()) || BONUS_FILE.test(e.name) || (ignoreDvdParts && DVD_VOB.test(e.name))) continue;
+    const p = path.join(dir,e.name);
+    try {
+      if ((await fileInfo(p)).size>=MIN_FILM_BYTES) return { reason:'video',path:p };
+    } catch (err) {
+      ctx.errors.push(p);
+      return { reason:'unreadable',path:p };
+    }
+  }
+  for (const e of entries) {
+    const p = path.join(dir,e.name);
+    if (!e.isDirectory() || SKIP_DIRS.has(e.name.toLowerCase()) || e.name.startsWith('.') || BONUS_DIR.test(e.name) || e.name.toLowerCase()==='audio_ts' || ctx.excluded.has(p.toLowerCase())) continue;
+    let children;
+    try { children = await list(p); }
+    catch (err) { ctx.errors.push(p); return {reason:'unreadable',path:p}; }
+    if (ctx.onProgress) ctx.onProgress({dirs:ctx.dirs,found:ctx.out.length,current:p});
+    const found = await findSeparateVideo(p,children,ctx);
+    if (found) return found;
+  }
+  return null;
+}
+
 async function scanDir(dir, ctx, isRoot) {
   if (ctx.shouldStop && ctx.shouldStop()) return;
   let entries;
@@ -82,9 +108,9 @@ async function scanDir(dir, ctx, isRoot) {
   const lowerNames = new Map(entries.map((e) => [e.name.toLowerCase(), e]));
 
   const wrappedDvd = lowerNames.get('video_ts')?.isDirectory();
-  const otherVideos = entries.some(e=>e.isFile() && VIDEO.has(path.extname(e.name).toLowerCase()) && !DVD_VOB.test(e.name) && !BONUS_FILE.test(e.name));
-  const otherDirs = entries.some(e=>e.isDirectory() && !SKIP_DIRS.has(e.name.toLowerCase()) && !e.name.startsWith('.') && !BONUS_DIR.test(e.name) && e.name.toLowerCase()!=='audio_ts');
-  const flatDvd = !wrappedDvd && !otherVideos && !otherDirs && entries.some(e=>e.isFile() && DVD_TITLE_VOB.test(e.name));
+  const hasDvdParts = !wrappedDvd && entries.some(e=>e.isFile() && DVD_TITLE_VOB.test(e.name));
+  const dvdBlocker = hasDvdParts ? await findSeparateVideo(dir,entries,ctx,true) : null;
+  const flatDvd = hasDvdParts && !dvdBlocker;
   const disc = (wrappedDvd || flatDvd) ? 'dvd' : lowerNames.get('bdmv')?.isDirectory() ? 'bluray' : null;
   if (disc) {
     const video = wrappedDvd ? path.join(dir,lowerNames.get('video_ts').name) : dir;
@@ -112,7 +138,7 @@ async function scanDir(dir, ctx, isRoot) {
   const main = videos.filter((v) => !BONUS_FILE.test(v.file) && v.size >= MIN_FILM_BYTES);
   const seasonDirs = subdirs.filter((d) => SEASON_DIR.test(d));
   const episodes = main.filter((v) => EPISODE.test(v.file));
-  const seriesLike = !isRoot && (seasonDirs.length > 0 || episodes.length >= 2 || looksLikeSeries(main));
+  const seriesLike = !hasDvdParts && !isRoot && (seasonDirs.length > 0 || episodes.length >= 2 || looksLikeSeries(main));
 
   if (seriesLike) {
     ctx.out.push({ kind: 'series', path: dir, name, ...parseName(name, false), size: await dirSize(dir), mtime: 0, count: main.length, sidecars: [] });
@@ -121,10 +147,10 @@ async function scanDir(dir, ctx, isRoot) {
 
   const realSubdirs = subdirs.filter((d) => !BONUS_DIR.test(d));
   const parts = main.filter((v) => PART.test(v.file));
-  if (main.length === 1 && !isRoot) {
+  if (main.length === 1 && !isRoot && !hasDvdParts) {
     const v = main[0];
     ctx.out.push({ kind: 'folder', path: dir, file: v.file, name, ...parseName(name, false), size: v.size, mtime: v.mtime, video: path.join(dir, v.file), sidecars: subs });
-  } else if (main.length >= 2 && parts.length === main.length && !isRoot) {
+  } else if (main.length >= 2 && parts.length === main.length && !isRoot && !hasDvdParts) {
     ctx.out.push({ kind: 'parts', path: dir, name, ...parseName(name, false), size: main.reduce((a, v) => a + v.size, 0), mtime: Math.max(...main.map((v) => v.mtime)), video: path.join(dir, parts[0].file), sidecars: subs });
   } else {
     for (const v of main) {
@@ -133,7 +159,7 @@ async function scanDir(dir, ctx, isRoot) {
         continue;
       }
       const base = v.file.slice(0, v.file.length - path.extname(v.file).length).toLowerCase();
-      ctx.out.push({ kind: 'file', path: path.join(dir, v.file), file: v.file, name: v.file, ...parseName(v.file, true), size: v.size, mtime: v.mtime, video: path.join(dir, v.file), sidecars: subs.filter((s) => s.toLowerCase().startsWith(base)) });
+      ctx.out.push({ kind: 'file', dvdGroupingBlocker: DVD_VOB.test(v.file) ? dvdBlocker : null, path: path.join(dir, v.file), file: v.file, name: v.file, ...parseName(v.file, true), size: v.size, mtime: v.mtime, video: path.join(dir, v.file), sidecars: subs.filter((s) => s.toLowerCase().startsWith(base)) });
     }
   }
   for (const d of realSubdirs) await scanDir(path.join(dir, d), ctx, false);
