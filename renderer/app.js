@@ -2,7 +2,7 @@
 const $app = document.getElementById('app');
 const bridge = window.api || { call: async () => { throw new Error('Не загрузился мост к программе (preload).'); }, onProgress() {}, onUpdate() {} };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const ui = { screen: 'library', libraryLetter: 'all', libraryNeeds: false, q: '', wishQ: '', wishShown: 40, shown: 40, modal: null, menu: null, toast: null, progress: null, version: '', update: null, reviewQ: {}, reviewResults: {}, busy: false, error: null, hasKey: false, state: null, review: [], reviewShown: 12, reviewPeople: {}, reviewNote: {}, candInfo: {}, candLoading: false, rescue: null, diskTab: 'folders', scan: null, orphanSearch: {}, orphanQ: {}, orphanShown: 12, dups: [], plan: [], planFailed: [] };
+const ui = { screen: 'library', libraryLetter: 'all', libraryNeeds: false, q: '', wishQ: '', wishShown: 40, shown: 40, modal: null, menu: null, toast: null, progress: null, version: '', update: null, reviewQ: {}, reviewResults: {}, busy: false, error: null, hasKey: false, state: null, review: [], reviewShown: 12, reviewPeople: {}, reviewNote: {}, candInfo: {}, candLoading: false, rescue: null, diskTab: 'folders', scan: null, orphanSearch: {}, orphanQ: {}, orphanShown: 12, dups: [], plan: [], renameShown: 300, planFailed: [] };
 const actions = {};
 let actionSeq = 0;
 
@@ -396,6 +396,32 @@ async function ignoreFile(id) {
 function renameSelected(p) {
   return p.requiresConfirmation ? !!(ui.planOn && ui.planOn.has(p.id)) : !(ui.planOff && ui.planOff.has(p.id));
 }
+function selectRenameRows(rows) {
+  const signatures = new Map(rows.map(p=>[p.id,renameSignature(p)]));
+  ui.planOn = ui.planOn || new Set();
+  ui.planOff = ui.planOff || new Set();
+  let selected = 0;
+  for (const p of ui.plan) {
+    if (signatures.get(p.id)!==renameSignature(p)) continue;
+    if (p.requiresConfirmation) ui.planOn.add(p.id);
+    else ui.planOff.delete(p.id);
+    selected++;
+  }
+  return selected;
+}
+function selectAllRenames() {
+  const rows = ui.plan.map(p=>({...p}));
+  const unconfirmed = rows.filter(p=>p.requiresConfirmation && !renameSelected(p));
+  if (unconfirmed.length) ui.modal={type:'rename-select-all',rows,unconfirmed};
+  else selectRenameRows(rows);
+  render();
+}
+function clearAllRenames() {
+  ui.planOn = new Set();
+  ui.planOff = new Set(ui.plan.map(p=>p.id));
+  render();
+}
+
 function renameCard(p) {
   const f = ui.state.films[p.filmKey] || {};
   const reasons = { manual: 'Ты подтвердил фильм вручную', memory: 'Сохранённая связь по названию и году', name: 'Только по совпадению названия в библиотеке', 'name-year': 'По совпадению названия и года', 'name-near-year': 'По названию и году с расхождением в один год', duration: 'По названию и близкой длительности', moved: 'По прежней связи при перемещении', unknown: 'Связь из прежней версии: способ сопоставления не сохранён' };
@@ -442,12 +468,12 @@ function disks() {
     body = `<div class="sub">Эти файлы скрыты из разбора. Их можно вернуть без повторного добавления папки.</div><div class="list">${ignored.map((e) => `<div class="film"><div><div class="ftitle">${esc(e.title || e.name)}</div><div class="path">${esc(e.path)}</div></div><button class="mini" data-a="${on(() => restoreIgnored(e.id))}">Вернуть в разбор</button></div>`).join('') || '<div class="card sub">Игнорируемых файлов нет.</div>'}</div>`;
   }
   if (ui.diskTab === 'rename') {
-    const selected = ui.plan.slice(0, 300).filter(renameSelected);
-    body = `<section class="card"><h2>Единый стиль названий</h2><div class="sub">Проверь, какой фильм связан с файлом. Год берётся из этой записи TMDB. Сомнительные строки требуют отдельного подтверждения. Меняется только имя внешней папки или файла.</div><button class="btn primary" ${selected.length ? '' : 'disabled'} data-a="${on(async () => {
-      const rows = ui.plan.slice(0, 300).filter(renameSelected);
+    const selected = ui.plan.filter(renameSelected);
+    body = `<section class="card"><h2>Единый стиль названий</h2><div class="sub">Проверь, какой фильм связан с файлом. Год берётся из этой записи TMDB. Сомнительные строки требуют подтверждения фильма и года. Меняется только имя внешней папки или файла.</div><div class="row"><button class="btn" ${ui.plan.length?'':'disabled'} data-a="${on(selectAllRenames)}">Выбрать всё</button><button class="btn" ${selected.length?'':'disabled'} data-a="${on(clearAllRenames)}">Снять всё</button><button class="btn primary" ${selected.length ? '' : 'disabled'} data-a="${on(async () => {
+      const rows = ui.plan.filter(renameSelected);
       const r = await call('applyRename', rows.map((p) => p.id), rows.filter((p) => p.requiresConfirmation).map((p) => p.id));
       ui.state = r.state; ui.planFailed = r.failed; await loadDiskExtras(); render();
-    })}">Переименовать выбранные (${selected.length})</button></section>${ui.planFailed.map((x) => `<div class="error">${esc(x.from)}: ${esc(x.why)}</div>`).join('')}<div class="list">${ui.plan.slice(0, 300).map(renameCard).join('') || '<div class="card sub">Предложений по переименованию нет.</div>'}</div>${ui.plan.length > 300 ? '<div class="sub">Показаны первые 300 строк. Остальные доступны после их разбора.</div>' : ''}${(s.renameLog || []).length ? `<section class="card"><h2>Журнал переименований</h2>${s.renameLog.map((l, i) => ({ l, i })).reverse().slice(0, 50).map(({ l, i }) => `<div class="film"><div class="path">${esc(l.from)} → ${esc(l.to)}</div><button class="mini" data-a="${on(async () => { await call('undoRename', i); await refresh(); await loadDiskExtras(); })}">Отменить</button></div>`).join('')}</section>` : ''}`;
+    })}">Переименовать выбранные (${selected.length})</button></div><div class="sub">Показано ${Math.min(ui.renameShown,ui.plan.length)} из ${ui.plan.length}. Массовый выбор действует на весь список.</div></section>${ui.planFailed.map((x) => `<div class="error">${esc(x.from)}: ${esc(x.why)}</div>`).join('')}<div class="list">${ui.plan.slice(0, ui.renameShown).map(renameCard).join('') || '<div class="card sub">Предложений по переименованию нет.</div>'}</div>${ui.plan.length > ui.renameShown ? `<button class="btn" data-a="${on(()=>{ui.renameShown+=300;render();})}">Показать ещё</button>` : ''}${(s.renameLog || []).length ? `<section class="card"><h2>Журнал переименований</h2>${s.renameLog.map((l, i) => ({ l, i })).reverse().slice(0, 50).map(({ l, i }) => `<div class="film"><div class="path">${esc(l.from)} → ${esc(l.to)}</div><button class="mini" data-a="${on(async () => { await call('undoRename', i); await refresh(); await loadDiskExtras(); })}">Отменить</button></div>`).join('')}</section>` : ''}`;
   }
   if (ui.diskTab === 'rename') {
     const kept = es.filter(e=>e.renamePreference==='keep');
@@ -533,6 +559,10 @@ function modal() {
   const close = `<button class="mini" data-a="${on(() => { ui.modal = null; render(); })}">Закрыть</button>`;
   let body = '';
   let title = '';
+  if (m.type === 'rename-select-all') {
+    title = 'Выбрать все предложения';
+    body = `<div class="sub">Будет выбрано строк: ${m.rows.length}. Из них ещё требуют проверки фильма и года: ${m.unconfirmed.length}. Проверь эти предложения перед общим подтверждением. Файлы сейчас не переименовываются.</div><div class="list">${m.unconfirmed.map(p=>`<div class="film"><div><div class="path">${esc(p.dir)}</div><div>${esc(p.from)} → <strong>${esc(p.to)}</strong></div><div class="sub">${esc(p.title||'')} · год фильма: ${esc(p.filmYear||'не указан')}</div></div></div>`).join('')}</div><div class="row"><button class="btn primary" data-a="${on(()=>{const selected=selectRenameRows(m.rows);ui.modal=null;render();if(selected!==m.rows.length)say('Часть предложений изменилась. Выбор применён только к неизменившимся строкам.');})}">Фильмы и годы верны — выбрать всё</button><button class="btn" data-a="${on(()=>{ui.modal=null;render();})}">Отмена</button></div>`;
+  }
   if (m.type === 'director-name') {
     const d = ui.state.directors[m.id];
     title = 'Имя режиссёра';

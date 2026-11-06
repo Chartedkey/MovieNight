@@ -700,3 +700,31 @@ test('проверка скачивания не подтверждает нал
   r.run(`ui.state={files:{x:{id:'x',filmKey:'m1',state:'linked',path:'/offline/film.mkv'}},films:{m1:{key:'m1'}},directors:{},folders:[{path:'/offline',role:'normal',status:'offline'}]};runScan=async()=>true;`);
   await r.run("checkWishDownload('m1')");assert.match(r.run('ui.toast'),/не подтверждён/);
 });
+
+test('выбрать всё: подтверждение не меняет выбор до согласия, переименование получает больше 300 строк',async()=>{
+  const calls=[];const plan=Array.from({length:351},(_,i)=>({id:'p'+i,dir:'/films',from:`Фильм ${i}.mkv`,to:`Фильм ${i} (2000).mkv`,title:'Фильм '+i,filmKey:'m'+i,filmYear:2000,requiresConfirmation:i%2===0}));
+  const r=orphanRenderer(async(method,...args)=>{calls.push([method,...args]);if(method==='applyRename')return {state:{files:{},films:{},directors:{},folders:[],near:[]},failed:[]};return [];});
+  r.run(`ui.diskTab='rename';ui.state.folders=[];ui.state.near=[];ui.plan=${JSON.stringify(plan)};clearAllRenames();selectAllRenames();`);
+  assert.equal(r.run('ui.plan.filter(renameSelected).length'),0);assert.equal(r.run('ui.modal.unconfirmed.length'),176);assert.equal(calls.length,0);
+  r.run('ui.modal=null');assert.equal(r.run('ui.plan.filter(renameSelected).length'),0);
+  r.run('selectAllRenames();selectRenameRows(ui.modal.rows);ui.modal=null');assert.equal(r.run('ui.plan.filter(renameSelected).length'),351);
+  const html=r.run('disks()');const id=html.match(/data-a="([^"]+)">Переименовать выбранные \(351\)/)[1];
+  await r.run(`actions[${JSON.stringify(id)}]()`);
+  const apply=calls.find(c=>c[0]==='applyRename');assert.equal(apply[1].length,351);assert.equal(apply[2].length,176);assert.ok(apply[1].includes('p350'));assert.ok(apply[2].includes('p350'));
+});
+
+test('общее подтверждение не выбирает изменившиеся и новые сомнительные предложения',()=>{
+  const r=orphanRenderer(async()=>{});
+  r.run(`ui.plan=[{id:'a',from:'a',to:'a (2000)',filmKey:'m1',filmYear:2000,requiresConfirmation:true},{id:'b',from:'b',to:'b (2000)',filmKey:'m2',filmYear:2000,requiresConfirmation:true}];clearAllRenames();selectAllRenames();ui.plan[1]={...ui.plan[1],to:'b (2001)',filmYear:2001};ui.plan.push({id:'c',from:'c',to:'c (2000)',requiresConfirmation:true});selectRenameRows(ui.modal.rows);`);
+  assert.equal(r.run('renameSelected(ui.plan[0])'),true);assert.equal(r.run('renameSelected(ui.plan[1])'),false);assert.equal(r.run('renameSelected(ui.plan[2])'),false);
+  r.run('clearAllRenames()');assert.equal(r.run('ui.plan.filter(renameSelected).length'),0);
+});
+
+test('массовый выбор сохраняется при обновлении плана и не включает оставленные имена',async()=>{
+  let plan=[{id:'a',from:'a',to:'a (2000)',requiresConfirmation:true},{id:'b',from:'b',to:'b (2000)',requiresConfirmation:false}];
+  const r=orphanRenderer(async m=>m==='renamePlan'?JSON.parse(JSON.stringify(plan)):[]);
+  r.run(`ui.state.files={kept:{id:'kept',renamePreference:'keep'}};ui.plan=${JSON.stringify(plan)};selectRenameRows(ui.plan);`);
+  await r.run('loadDiskExtras()');assert.equal(r.run('ui.plan.filter(renameSelected).length'),2);assert.equal(r.run("ui.planOn.has('kept')"),false);
+  plan[0].to='a (2001)';await r.run('loadDiskExtras()');assert.equal(r.run('renameSelected(ui.plan[0])'),false);assert.equal(r.run('renameSelected(ui.plan[1])'),true);
+  r.run('clearAllRenames()');await r.run('loadDiskExtras()');assert.equal(r.run('ui.plan.filter(renameSelected).length'),0);
+});
