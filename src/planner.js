@@ -30,41 +30,83 @@
     return c;
   }
   function fileIsAvailable(state,e){return e.state==='linked'&&!Object.values(state.lost||{}).some(l=>within(e.path,l.path))&&!(state.folders||[]).some(d=>['offline','suspicious'].includes(d.status)&&within(e.path,d.path));}
-  function candidates(state,c,s) {
+  const ATTENTION = ['easy','medium','focused'];
+  const REASONS = {
+    status:'Фильм не разрешён для просмотра или пересмотра', filmography:'Фильм только в фильмографии, вне активной библиотеки',
+    banned:'Для режиссёра отключены предложения', favorites:'Режиссёр не отмечен любимым', director:'Другой режиссёр', source:'Фильм не входит в выбранный источник',
+    availability:'Нет файла на доступном диске', runtime:'Неизвестна длительность при включённом лимите времени',
+    countriesUnknown:'Не указана страна производства', region:'Другой кинематограф', country:'Другая страна',
+    genre:'Не подходит жанр', style:'Нет вашей отметки выбранного нуара/неонуара',
+    weightUnknown:'Не задана ваша отметка эмоциональной нагрузки', weight:'Другая эмоциональная нагрузка',
+    attentionUnknown:'Не задана ваша отметка внимания', attention:'Требует больше внимания, чем выбрано сегодня',
+  };
+  const FILTER_FIELD = {availability:'availability',runtime:'limit',countriesUnknown:'region',region:'region',country:'country',genre:'genre',style:'genre',weightUnknown:'weight',weight:'weight',attentionUnknown:'attention',attention:'attention'};
+  function collectCandidates(state,c,s,onlyKey=null) {
     const near = new Set((state.near||[]).flatMap(e=>e.ids));
     const byFilm=new Map();for(const e of Object.values(state.files||{})){if(e.state==='linked'){if(!byFilm.has(e.filmKey))byFilm.set(e.filmKey,[]);byFilm.get(e.filmKey).push(e);}}
-    return Object.values(state.films||{}).flatMap(f=>{
+    const base={},excluded={},fixable={};let scope=0,total=0;
+    const baseReject=code=>{base[code]=(base[code]||0)+1;return [];};
+    const rows=Object.values(state.films||{}).filter(f=>onlyKey===null||f.key===onlyKey).flatMap(f=>{
+      total++;
       const reviewed=['watched','dropped'].includes(f.status), explicitRewatch=s.source==='rewatch'||c.rewatch;
-      if(['nointerest','notfound'].includes(f.status)||reviewed&&!(f.rewatch&&explicitRewatch))return [];
-      if(!['queue','reserve','disk'].includes(f.status)&&!reviewed&&!(f.status==='candidate'&&c.allowFilmography&&String(s.director)===String(f.dir)))return [];
-      const dir=(state.directors||{})[f.dir];if(dir?.banned&&String(s.director)!==String(f.dir)&&!near.has(f.key))return [];
-      if(c.mode==='favorites'&&!dir?.fav)return [];
-      if(s.director!=='any'&&String(f.dir)!==String(s.director))return [];
+      if(['nointerest','notfound'].includes(f.status)||reviewed&&!(f.rewatch&&explicitRewatch))return baseReject('status');
+      if(!['queue','reserve','disk'].includes(f.status)&&!reviewed&&!(f.status==='candidate'&&c.allowFilmography&&String(s.director)===String(f.dir)))return baseReject('filmography');
+      const dir=(state.directors||{})[f.dir];if(dir?.banned&&String(s.director)!==String(f.dir)&&!near.has(f.key))return baseReject('banned');
+      if(c.mode==='favorites'&&!dir?.fav)return baseReject('favorites');
+      if(s.director!=='any'&&String(f.dir)!==String(s.director))return baseReject('director');
       const isNear=near.has(f.key),src=s.source==='inherit'?c.source:s.source;
-      if(src==='near'&&!isNear||src==='rest'&&isNear||src==='rewatch'&&!f.rewatch)return [];
-      const copies=byFilm.get(f.key)||[];
-      const healthy=copies.filter(e=>fileIsAvailable(state,e));
-      if(c.availability==='only'&&!healthy.length)return [];
+      if(src==='near'&&!isNear||src==='rest'&&isNear||src==='rewatch'&&!f.rewatch)return baseReject('source');
+      scope++;
+      const rejected=[];
+      const copies=byFilm.get(f.key)||[],healthy=copies.filter(e=>fileIsAvailable(state,e));
+      if(c.availability==='only'&&!healthy.length)rejected.push('availability');
       const durations=healthy.map(e=>e.duration).filter(n=>Number.isFinite(n)&&n>0);
       const runtime=f.nightTags?.runtime|| (durations.length?Math.max(...durations):f.runtime)||0;
-      if(c.limit&&!runtime)return [];
-      const countries=(f.countryCodes?.length?f.countryCodes:f.countries||[]).map(codeOf);
-      if(s.region!=='any'&&!countries.some(x=>REGIONS[s.region].includes(x)))return [];
-      if(s.country!=='any'&&!countries.includes(s.country))return [];
-      const genres=new Set([...(f.genreIds||[]).map(String),...Object.keys(GENRES).filter(id=>(f.genres||[]).some(g=>g.toLowerCase()===GENRES[id].toLowerCase()||g.toLowerCase()===EN[id].toLowerCase()))]);
-      if(s.genre==='crime-thriller'&&!['80','53'].every(x=>genres.has(x)))return [];
-      if(['noir','neonoir'].includes(s.genre)&&!(f.nightTags?.styles||[]).includes(s.genre))return [];
-      if(!['any','crime-thriller','noir','neonoir'].includes(s.genre)&&!genres.has(s.genre))return [];
-      if(s.weight!=='any'&&f.nightTags?.weight!==s.weight||s.attention!=='any'&&f.nightTags?.attention!==s.attention)return [];
+      if(c.limit&&!runtime)rejected.push('runtime');
+      if(s.region!=='any'||s.country!=='any'){
+        const countries=(f.countryCodes?.length?f.countryCodes:f.countries||[]).map(codeOf);
+        if(!countries.length)rejected.push('countriesUnknown');
+        else {if(s.region!=='any'&&!countries.some(x=>REGIONS[s.region].includes(x)))rejected.push('region');if(s.country!=='any'&&!countries.includes(s.country))rejected.push('country');}
+      }
+      if(['noir','neonoir'].includes(s.genre)){if(!(f.nightTags?.styles||[]).includes(s.genre))rejected.push('style');}
+      else if(s.genre!=='any'){
+        const genres=new Set([...(f.genreIds||[]).map(String),...Object.keys(GENRES).filter(id=>(f.genres||[]).some(g=>g.toLowerCase()===GENRES[id].toLowerCase()||g.toLowerCase()===EN[id].toLowerCase()))]);
+        if(s.genre==='crime-thriller'?!['80','53'].every(x=>genres.has(x)):!genres.has(s.genre))rejected.push('genre');
+      }
+      if(s.weight!=='any'){
+        if(!['light','medium','heavy'].includes(f.nightTags?.weight))rejected.push('weightUnknown');
+        else if(f.nightTags.weight!==s.weight)rejected.push('weight');
+      }
+      if(s.attention!=='any'){
+        const level=ATTENTION.indexOf(f.nightTags?.attention);
+        if(level<0)rejected.push('attentionUnknown');else if(level>ATTENTION.indexOf(s.attention))rejected.push('attention');
+      }
+      if(rejected.length){
+        rejected.forEach(code=>{excluded[code]=(excluded[code]||0)+1;});
+        const fields=new Set(rejected.map(code=>code==='countriesUnknown'?(s.region!=='any'&&s.country!=='any'?'geography':s.region!=='any'?'region':'country'):FILTER_FIELD[code]));
+        if(fields.size===1){const field=[...fields][0];fixable[field]=(fixable[field]||0)+1;}
+        return [];
+      }
       const reasons=[isNear?'Из ближайших':f.status==='queue'?'Из активной очереди':reviewed?'Разрешён пересмотр':'Из библиотеки',healthy.length?'Есть на доступном диске':copies.length?'Наличие нужно проверить':state.allConnected?'Нужно скачать':'На подключённых дисках не найден'];
       if(dir?.fav)reasons.push('Любимый режиссёр');if(f.wish)reasons.push('Отмечен «Хочу»');
       return [{key:f.key,runtime,available:!!healthy.length,copies:copies.map(e=>e.id),near:isNear,dirs:(f.directorIds?.length?f.directorIds:[f.dir]).filter(d=>d!==null&&d!==undefined),reasons,score:(healthy.length?100:0)+(f.status==='queue'?18:0)+(c.source==='nearfirst'&&isNear?32:0)+(f.wish?12:0)}];
     });
+    return {rows,total,scope,base,excluded,fixable};
   }
+  function candidates(state,c,s){return collectCandidates(state,c,s).rows;}
+  function analyzeCandidates(state,c,s,onlyKey=null){
+    const data=collectCandidates(state,c,s,onlyKey);
+    const counts=data.scope?data.excluded:data.base;
+    const reasons=Object.entries(counts).map(([code,count])=>({code,count,label:REASONS[code]}));
+    const details=reasons.map(r=>`${r.label}: ${r.count}`).join('; ');
+    const summary=data.rows.length?`Подходящих фильмов: ${data.rows.length}.`:!data.total?'В библиотеке нет фильмов.':`Нет подходящих фильмов. ${details}.`;
+    return {...data,reasons,summary};
+  }
+  function explainFilm(state,c,s,key){const d=analyzeCandidates(state,c,s,key);return d.total?d.reasons.map(r=>r.label):['Фильм больше не найден в библиотеке'];}
   function check(state,c,keys=c.slots.map(s=>s.film)) {
     validate(c);const errors=[],rows=[];if(keys.length!==c.count||keys.some(k=>!k))errors.push('Заполни все места.');
     const used=new Set(),dirs=new Set(),groups=new Set();
-    keys.forEach((k,i)=>{if(!k)return;const f=candidates(state,c,c.slots[i]).find(f=>f.key===k);if(!f){errors.push(`Место ${i+1}: фильм не соответствует условиям или сведениям о наличии.`);return;}if(used.has(k))errors.push('Фильм повторяется.');used.add(k);if(!c.repeat&&f.dirs.some(d=>dirs.has(d)))errors.push('Режиссёр повторяется.');f.dirs.forEach(d=>dirs.add(d));for(const e of state.near||[]){if(e.ids.length>1&&e.ids.includes(k)){if(groups.has(e.key))errors.push('Два фильма из одной строки «или».');groups.add(e.key);}}rows.push(f);});
+    keys.forEach((k,i)=>{if(!k)return;const f=candidates(state,c,c.slots[i]).find(f=>f.key===k);if(!f){errors.push(`Место ${i+1}: ${explainFilm(state,c,c.slots[i],k).join('; ')}.`);return;}if(used.has(k))errors.push('Фильм повторяется.');used.add(k);if(!c.repeat&&f.dirs.some(d=>dirs.has(d)))errors.push('Режиссёр повторяется.');f.dirs.forEach(d=>dirs.add(d));for(const e of state.near||[]){if(e.ids.length>1&&e.ids.includes(k)){if(groups.has(e.key))errors.push('Два фильма из одной строки «или».');groups.add(e.key);}}rows.push(f);});
     const time=rows.reduce((n,f)=>n+f.runtime,0)+Math.max(0,rows.length-1)*c.pause;
     if(c.limit&&time>c.limit)errors.push(`Превышение лимита на ${time-c.limit} мин.`);
     if(c.source==='mix'&&rows.length===c.count&&rows.filter(f=>f.near).length!==c.nearCount)errors.push('Не выполнена пропорция источников.');
@@ -77,11 +119,24 @@
       const keep=s.locked||replace!==null&&i!==replace;
       const all=candidates(state,c,s);return all.filter(f=>keep?f.key===s.film:!(i===replace&&f.key===s.film)).map(f=>({...f,rank:f.score+((Number(String(f.key).replace(/\D/g,''))||0)*31+seed*17+i*7)%29/10})).sort((a,b)=>b.rank-a.rank);
     });
-    const empty=pools.findIndex(p=>!p.length);if(empty>=0)return {ok:false,message:`Место ${empty+1}: нет подходящих фильмов. Проверь источник, ручные отметки, режиссёра и известную длительность.`,config:c};
+    const empty=pools.findIndex(p=>!p.length);
+    if(empty>=0){
+      const slot=c.slots[empty],diagnosis=analyzeCandidates(state,c,slot);
+      let message=diagnosis.summary,kind='filters';
+      if(slot.locked||replace!==null&&empty!==replace){
+        kind='kept';message=!slot.film?'Место ещё не заполнено. Сначала подбери всю ночь или выбери фильм вручную.':`Сохранённый фильм не подходит: ${explainFilm(state,c,slot,slot.film).join('; ')}. Открепи его или измени условия.`;
+      }else if(empty===replace&&diagnosis.rows.length){kind='replacement';message='Другого варианта нет: текущим условиям соответствует только выбранный фильм.';}
+      return {ok:false,message:`Место ${empty+1}: ${message}`,issue:{kind,index:empty,diagnosis},config:c};
+    }
     const order=pools.map((_,i)=>i).sort((a,b)=>pools[a].length-pools[b].length),chosen=Array(c.count).fill(null);
     let best=null,bestScore=-Infinity,nodes=0,bounded=false;
     const deadline=Date.now()+Math.min(1500,Math.max(1,timeBudgetMs));
     const minima=pools.map(p=>p.reduce((n,f)=>Math.min(n,f.runtime),Infinity));
+    const minimumTime=minima.reduce((a,b)=>a+b,0)+Math.max(0,c.count-1)*c.pause;
+    if(c.limit&&minimumTime>c.limit)return {ok:false,message:`Лимит ${c.limit} мин слишком мал: даже самые короткие варианты для каждого места с перерывами требуют не меньше ${minimumTime} мин. Увеличь лимит или сократи число фильмов.`,issue:{kind:'time',minimumTime},config:c};
+    const uniqueFilms=new Set(pools.flat().map(r=>r.key)).size,uniqueDirs=new Set(pools.flat().flatMap(r=>r.dirs)).size;
+    if(uniqueFilms<c.count)return {ok:false,message:`Для ${c.count} мест найдено только ${uniqueFilms} разных подходящих фильмов. Расширь условия или сократи число мест.`,issue:{kind:'combination'},config:c};
+    if(!c.repeat&&pools.flat().every(r=>r.dirs.length)&&uniqueDirs<c.count)return {ok:false,message:`Для ${c.count} мест доступны фильмы только ${uniqueDirs} режиссёров, а повтор запрещён. Разреши повтор режиссёра или измени условия.`,issue:{kind:'combination'},config:c};
     const dfs=(depth,time,score,used,dirs,groups,near)=>{
       if(++nodes>Math.min(maxNodes,1000000)||Date.now()>deadline){bounded=true;return;}
       if(depth===order.length){if(c.source==='mix'&&near!==c.nearCount)return;if(score>bestScore){bestScore=score;best=chosen.slice();}return;}
@@ -97,9 +152,12 @@
       }
     };
     dfs(0,0,0,new Set(),new Set(),new Set(),0);
-    if(!best)return {ok:false,message:bounded?'За отведённое время набор не подобран. Уточни условия или сократи число мест.':'Подходящий набор не найден. Проверь время, повтор режиссёров и пропорцию источников.',config:c};
+    if(!best){
+      const message=bounded?'За отведённое время набор не подобран. Уточни условия или сократи число мест.':'Для отдельных мест варианты есть, но совместимый набор не найден: проверь общий лимит, повторы режиссёров, альтернативы «или» и смесь источников.';
+      return {ok:false,message,issue:{kind:bounded?'budget':'combination'},config:c};
+    }
     c.slots.forEach((s,i)=>s.film=best[i]);return {ok:true,config:c,...check(state,c),bounded};
   }
-  const api={GENRES,REGIONS,codeOf,fileIsAvailable,defaults,slot,validate,candidates,check,generate,title};
+  const api={GENRES,REGIONS,codeOf,fileIsAvailable,defaults,slot,validate,candidates,analyzeCandidates,explainFilm,check,generate,title};
   if(typeof module==='object'&&module.exports)module.exports=api;else root.NightPlanner=api;
 })(globalThis);

@@ -35,3 +35,47 @@ test('сброс всего подбора сохраняет библиотек
   for(const key of Object.keys(before).filter(k=>k!=='nightDraft'))assert.deepEqual(s.state[key],before[key],key);
   const restored=new Service({dir:s.dir});assert.deepEqual(restored.state.nightDraft,P.defaults());assert.equal(restored.state.nights[0].slots[0].result,'skipped');assert.equal(restored.state.activeNight,nid);
 });
+
+test('внимание сегодня — верхний предел: среднее допускает easy/medium, неизвестное не считается лёгким',()=>{
+  const s=state(),c=config(1);Object.values(s.films).forEach(f=>f.status='nointerest');s.films.m1.status='queue';
+  c.slots[0].attention='medium';for(const level of ['easy','medium']){s.films.m1.nightTags.attention=level;assert.equal(P.generate(s,c).ok,true,level);}
+  for(const level of ['focused','unknown',undefined]){s.films.m1.nightTags.attention=level;assert.equal(P.generate(s,c).ok,false,String(level));}
+  c.slots[0].attention='focused';for(const level of ['easy','medium','focused']){s.films.m1.nightTags.attention=level;assert.equal(P.generate(s,c).ok,true,level);}
+  c.slots[0].attention='easy';s.films.m1.nightTags.attention='medium';assert.equal(P.generate(s,c).ok,false);
+});
+
+test('сценарий скриншота: отказ на первом/азиатском месте объясняется отсутствием ручной отметки',()=>{
+  const s=state(),c=config();for(const f of Object.values(s.films))delete f.nightTags;
+  c.slots[0].attention='medium';c.slots[1].attention='medium';c.slots[1].region='asia';
+  const before=JSON.stringify({s,c});let r=P.generate(s,c);assert.equal(r.ok,false);assert.equal(r.issue.index,0);assert.match(r.message,/Не задана ваша отметка внимания/);assert.equal(r.issue.diagnosis.excluded.attentionUnknown,8);assert.equal(JSON.stringify({s,c}),before);
+  c.slots[0].attention='any';r=P.generate(s,c);assert.equal(r.issue.index,1);assert.equal(r.issue.diagnosis.fixable.attention,4);
+  s.films.m1.nightTags={attention:'easy'};r=P.generate(s,c);assert.equal(r.ok,true);assert.equal(r.config.slots[1].film,'m1');assert.equal(s.films.m3.nightTags,undefined);
+});
+
+test('диагностика разделяет страну, ручные отметки, длительность и недоступные файлы',()=>{
+  const s=state(),c=config(1);c.availability='only';c.slots[0].region='asia';c.slots[0].attention='medium';
+  const f=s.films.m1;f.countries=[];f.runtime=null;delete f.nightTags;const d=P.analyzeCandidates(s,c,c.slots[0],'m1');
+  assert.equal(d.excluded.countriesUnknown,1);assert.equal(d.excluded.attentionUnknown,1);assert.equal(d.excluded.runtime,1);assert.equal(d.excluded.availability,1);assert.equal(Object.keys(d.fixable).length,0);
+  const reasons=P.explainFilm(s,c,c.slots[0],'m1').join(' ');assert.match(reasons,/страна/);assert.match(reasons,/внимания/);assert.match(reasons,/длительность/);assert.match(reasons,/диске/);
+});
+
+test('азиатский фильтр работает по старым русским названиям и ISO без привязки к языку имени режиссёра',()=>{
+  const s=state(),c=config(1);c.slots[0].director='1';c.slots[0].region='asia';c.slots[0].attention='medium';s.directors[1].name='大島渚';
+  for(const country of ['Япония','Japan']){s.films.m1.countries=[country];assert.equal(P.generate(s,c).ok,true,country);}
+  s.films.m1.countryCodes=['JP'];s.films.m1.countries=[];assert.equal(P.generate(s,c).ok,true);s.films.m1.countryCodes=['FR'];const r=P.generate(s,c);assert.match(r.message,/Другой кинематограф/);
+});
+
+test('ошибки закрепления и замены отличаются от отсутствия подходящих фильмов',()=>{
+  const s=state(),c=config(1);c.slots[0].film='missing';c.slots[0].locked=true;let r=P.generate(s,c);assert.equal(r.issue.kind,'kept');assert.match(r.message,/больше не найден/);
+  c.slots[0].locked=false;c.slots[0].film='m1';c.slots[0].director='1';r=P.generate(s,c,{replace:0});assert.equal(r.issue.kind,'replacement');assert.match(r.message,/Другого варианта нет/);
+});
+
+test('подбор объясняет слишком короткий лимит и недостаток разных фильмов/режиссёров',()=>{
+  const s=state(),c=config(2);s.files={};c.limit=180;let r=P.generate(s,c);assert.equal(r.issue.kind,'time');assert.equal(r.issue.minimumTime,190);assert.match(r.message,/190/);
+  c.limit=0;c.count=9;c.slots=Array.from({length:9},P.slot);r=P.generate(s,c);assert.match(r.message,/9 мест.*8 разных/);
+  c.limit=480;c.count=4;c.slots=Array.from({length:4},P.slot);Object.values(s.films).forEach((f,i)=>{f.dir=i%2+1;f.directorIds=[f.dir];});r=P.generate(s,c);assert.match(r.message,/только 2 режиссёров/);c.repeat=true;assert.equal(P.generate(s,c).ok,true);
+});
+
+test('отказ generateNight не меняет библиотеку, оценки, черновик и утверждённые ночи',()=>{
+  const s=svc(),c=config();s.state.films.m1.rating=9;s.saveNightDraft(c);c.slots[0].attention='medium';Object.values(s.state.films).forEach(f=>delete f.nightTags);const before=JSON.stringify(s.state);const r=s.generateNight(c);assert.equal(r.ok,false);assert.match(r.message,/отметка внимания/);assert.equal(JSON.stringify(s.state),before);
+});

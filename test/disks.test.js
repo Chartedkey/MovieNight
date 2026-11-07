@@ -842,3 +842,17 @@ test('при блокировке объединения DVD карточка о
   const html=r.run(`orphanCard({id:'x',kind:'file',title:'VTS 03 1',path:'/films/VTS_03_1.VOB',size:1000000000,dvdGroupingBlocker:{reason:'video',path:'/films/COVERS/Другой фильм.mkv'}})`);
   assert.match(html,/DVD не объединён/);assert.match(html,/COVERS\/Другой фильм.mkv/);
 });
+
+test('быстрое исправление фильтра внимания меняет только выбранное место, сохраняя регион/источник и данные фильмов',async()=>{
+  const P=require('../src/planner'),cfg=P.defaults();cfg.slots[0].attention='easy';cfg.slots[1].attention='medium';cfg.slots[1].region='asia';cfg.slots[1].weight='light';
+  const state={films:{m1:{key:'m1',dir:1,status:'queue',rating:9}},directors:{},files:{},near:[],nightDraft:cfg};const calls=[];
+  const r=orphanRenderer(async(method,arg)=>{calls.push(method);if(method==='saveNightDraft'){state.nightDraft=JSON.parse(JSON.stringify(arg));return state;}throw Error('unexpected '+method);});
+  r.run(`ui.state=${JSON.stringify(state)};ui.nightEdit=${JSON.stringify(cfg)};ui.nightMessage='старое сообщение'`);
+  await r.run("nRemoveFilter(1,'attention')");assert.equal(r.run('ui.nightEdit.slots[0].attention'),'easy');assert.equal(r.run('ui.nightEdit.slots[1].attention'),'any');assert.equal(r.run('ui.nightEdit.slots[1].region'),'asia');assert.equal(r.run('ui.nightEdit.slots[1].weight'),'light');assert.equal(r.run('ui.nightMessage'),null);assert.equal(r.run('ui.state.films.m1.rating'),9);assert.deepEqual(calls,['saveNightDraft']);
+});
+
+test('подбор ночи дожидается отправленного сохранения условий',async()=>{
+  const calls=[];const r=orphanRenderer(async(method)=>{calls.push(method);return {ok:false,message:'Нет ручных отметок',state:{films:{},directors:{},files:{},near:[]}};});
+  r.run("ui.nightEdit=NightPlanner.defaults();ui.nightSaving=new Promise(resolve=>{globalThis.finishNightSaving=resolve;})");
+  const pending=r.run('nGenerate()');assert.deepEqual(calls,[]);r.run('finishNightSaving()');await pending;assert.deepEqual(calls,['generateNight']);assert.equal(r.run('ui.nightBusy'),false);assert.equal(r.run('ui.nightMessage'),'Нет ручных отметок');
+});
