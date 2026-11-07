@@ -27,6 +27,7 @@ function emptyState() {
     nearUnresolved: [],
     skipped: [],
     settings: {},
+    directorNameDrafts: {}, directorNameHistory: [],
     nightDraft: null, nights: [], nightTemplates: [], activeNight: null,
   };
 }
@@ -654,6 +655,7 @@ class Service {
     d.aliases = [...new Set([...(d.aliases || []), d.name, d.tmdbName, clean].filter(Boolean))];
     d.userName = clean || null;
     d.name = d.userName || d.tmdbName;
+    d.nameReviewed = !!clean;
     this.save(); return this.state;
   }
 
@@ -800,6 +802,6 @@ class Service {
   }
 }
 
-Object.assign(Service.prototype, require('./disks').diskMethods, require('./nights').nightMethods);
+Object.assign(Service.prototype, require('./director-names').directorNameMethods, require('./disks').diskMethods, require('./nights').nightMethods);
 
 module.exports = { Service, findInFilmography, emptyState, filmKey, QUEUE_MIN, QUEUE_MAX, SHORT_MINUTES };

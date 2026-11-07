@@ -396,6 +396,8 @@ function orphanRenderer(invoke) {
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/planner.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../renderer/night-ui.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/director-identity.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../renderer/director-ui.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../renderer/app.js'), 'utf8'), context);
   vm.runInContext(`globalThis.actualRender = render; render = () => {}; ui.screen = 'disks'; ui.diskTab = 'orphans';
     ui.state = { files: {}, films: {}, directors: {} }; ui.orphanShown = 1;`, context);

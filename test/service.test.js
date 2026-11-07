@@ -343,3 +343,62 @@ test('сохранённое желание можно отправить в б�
   await s.addFilm(9,{near:true,allowExtra:true});assert.equal(s.state.films.m9.status,'queue');assert.ok(s.state.near.some(e=>e.ids.includes('m9')));
   s.removeNear('m9');s.setFilmStatus('m9','watched');assert.equal(s.state.films.m9.wish,true);
 });
+
+function nameDraft(s,id,name,surname='',reviewed=true){
+  const I=require('../src/director-identity'),old=s.state.directorNameDrafts[id];
+  s.saveDirectorNameDraft(id,{name,surname,reviewed,selected:reviewed,token:old?.token||null,revision:old?.revision||null,baseVersion:old?.baseVersion||I.version(s.state.directors[id])});
+  return s.state.directorNameDrafts[id];
+}
+function applyNames(s,ids){return s.applyDirectorNames(ids,Object.fromEntries(ids.map(id=>[id,{token:s.state.directorNameDrafts[id].token,revision:s.state.directorNameDrafts[id].revision}])));}
+
+test('редактор имён: черновик переживает перезапуск и не меняет библиотеку до применения',async()=>{
+  const s=await imported(),films=JSON.stringify(s.state.films),near=JSON.stringify(s.state.near),old=s.state.directors[10].name;
+  nameDraft(s,10,'Русское имя','Фамилия');assert.equal(s.state.directors[10].name,old);assert.equal(JSON.stringify(s.state.films),films);assert.equal(JSON.stringify(s.state.near),near);
+  const r=new Service({dir:s.dir});assert.equal(r.state.directorNameDrafts[10].name,'Русское имя');assert.equal(r.state.directors[10].name,old);assert.equal(r.state.directorNameDrafts[10].selected,true);
+});
+
+test('редактор имён: пакет применяет только имена по прежним ID и сохраняет варианты поиска',async()=>{
+  const s=await imported();s.state.directors[10].fav=true;const films=JSON.stringify(s.state.films),near=JSON.stringify(s.state.near),d10={...s.state.directors[10]};
+  nameDraft(s,10,'Эрик Ромер','Ромер');nameDraft(s,20,'Питер Уир','Уир');applyNames(s,[10,20]);
+  assert.equal(s.state.directors[10].id,10);assert.equal(s.state.directors[10].nameReviewed,true);assert.equal(s.state.directors[10].fav,true);assert.equal(s.state.directors[10].marked,d10.marked);assert.equal(s.state.directors[10].sortSurname,'Ромер');assert.ok(s.state.directors[10].aliases.includes(d10.name));assert.equal(Object.keys(s.state.directorNameDrafts).length,0);assert.equal(s.state.directorNameHistory.length,1);assert.equal(JSON.stringify(s.state.films),films);assert.equal(JSON.stringify(s.state.near),near);
+  s.rate('m1',9);s.undoDirectorNames(s.state.directorNameHistory[0].id);assert.equal(s.state.directors[10].name,d10.name);assert.equal(s.state.films.m1.rating,9);assert.equal(s.state.directors[10].fav,true);assert.ok(s.state.directors[10].aliases.includes('Эрик Ромер'));
+});
+
+test('редактор имён: непроверенная или изменившаяся строка останавливает весь пакет',async()=>{
+  const s=await imported();nameDraft(s,10,'Первое');nameDraft(s,20,'Второе','',false);let before=JSON.stringify(s.state);assert.throws(()=>applyNames(s,[10,20]),/проверь/);assert.equal(JSON.stringify(s.state),before);
+  nameDraft(s,20,'Второе');s.setDirectorName(10,'Поздняя правка');before=JSON.stringify(s.state);assert.throws(()=>applyNames(s,[10,20]),/изменилось/);assert.equal(JSON.stringify(s.state),before);
+  const old=s.state.directorNameDrafts[10];s.rebaseDirectorNameDraft(10,old.token);assert.equal(s.state.directorNameDrafts[10].reviewed,false);assert.notEqual(s.state.directorNameDrafts[10].token,old.token);assert.equal(s.state.directorNameDrafts[10].name,'Первое');nameDraft(s,10,'Первое');applyNames(s,[10,20]);assert.equal(s.state.directors[10].name,'Первое');
+});
+
+test('редактор имён: старое автосохранение не восстанавливает удалённый или применённый черновик',async()=>{
+  const s=await imported(),draft={...nameDraft(s,10,'Имя')};s.discardDirectorNameDraft(10,draft.token);
+  assert.throws(()=>s.saveDirectorNameDraft(10,draft),/изменились/);assert.equal(s.state.directorNameDrafts[10],undefined);
+  nameDraft(s,10,'Новое');const applied={...s.state.directorNameDrafts[10]};applyNames(s,[10]);assert.throws(()=>s.saveDirectorNameDraft(10,applied),/изменились/);assert.equal(s.state.directorNameDrafts[10],undefined);
+});
+
+test('редактор имён: варианты TMDB не меняют отображение, черновики и личные решения',async()=>{
+  const s=await imported();s.setDirectorName(10,'Моё имя');nameDraft(s,10,'Предложение');const d=s.state.directors[10],before=require('../src/director-identity').version(d),draft=JSON.stringify(s.state.directorNameDrafts);
+  s.tmdb={get:async()=>({id:10,name:'贾樟柯',also_known_as:['Jia Zhangke','Цзя Чжанкэ']})};const r=await s.suggestDirectorNames(10);assert.ok(r.russian.includes('Цзя Чжанкэ'));assert.equal(d.name,'Моё имя');assert.equal(require('../src/director-identity').version(d),before);assert.equal(JSON.stringify(s.state.directorNameDrafts),draft);assert.ok(d.aliases.includes('Jia Zhangke'));
+  const snapshot=JSON.stringify(s.state);s.tmdb={get:async()=>({id:20,name:'Другой'})};await assert.rejects(s.suggestDirectorNames(10),/другом/);assert.equal(JSON.stringify(s.state),snapshot);
+});
+
+test('редактор имён: ошибка записи откатывает пакет, отмена не затирает позднюю правку',async()=>{
+  const s=await imported();nameDraft(s,10,'Имя');nameDraft(s,20,'Другое');const before=JSON.stringify(s.state),onDisk=fs.readFileSync(s.file,'utf8'),save=s.save;
+  s.save=()=>{throw Error('write failed');};assert.throws(()=>applyNames(s,[10,20]),/write failed/);assert.equal(JSON.stringify(s.state),before);assert.equal(fs.readFileSync(s.file,'utf8'),onDisk);s.save=save;
+  applyNames(s,[10,20]);const batch=s.state.directorNameHistory[0].id;s.setDirectorName(10,'Ещё новее');const later=JSON.stringify(s.state);assert.throws(()=>s.undoDirectorNames(batch),/позднее/);assert.equal(JSON.stringify(s.state),later);
+});
+
+test('редактор имён: пустой черновик сохраняется, одинаковые имена не объединяют разных людей',async()=>{
+  const s=await imported();nameDraft(s,10,'','',false);assert.equal(new Service({dir:s.dir}).state.directorNameDrafts[10].name,'');assert.throws(()=>nameDraft(s,10,''),/заполни/);assert.throws(()=>s.saveDirectorNameDraft(999,{}),/не найден/);
+  const filmDirs=Object.values(s.state.films).map(f=>[f.key,f.dir]);nameDraft(s,10,'Одинаковое имя');nameDraft(s,20,'Одинаковое имя');applyNames(s,[10,20]);assert.equal(s.state.directors[10].name,s.state.directors[20].name);assert.notEqual(s.state.directors[10].id,s.state.directors[20].id);assert.deepEqual(Object.values(s.state.films).map(f=>[f.key,f.dir]),filmDirs);
+});
+
+test('редактор имён: предпросмотр и автосохранение отклоняют устаревшую редакцию черновика',async()=>{
+  const s=await imported();nameDraft(s,10,'Первый вариант');
+  const first={...s.state.directorNameDrafts[10]},tokens={10:{token:first.token,revision:first.revision}};
+  nameDraft(s,10,'Новый вариант');const before=JSON.stringify(s.state);
+  assert.equal(s.state.directorNameDrafts[10].token,first.token);
+  assert.throws(()=>s.applyDirectorNames([10],tokens),/Предложение изменилось/);
+  assert.throws(()=>s.saveDirectorNameDraft(10,{...first,surname:first.surname}),/Черновик или имя уже изменились/);
+  assert.equal(JSON.stringify(s.state),before);applyNames(s,[10]);assert.equal(s.state.directors[10].name,'Новый вариант');
+});

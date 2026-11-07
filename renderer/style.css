@@ -72,3 +72,5 @@ h1{margin:0;font-size:30px;font-weight:800}h2{margin:0;font-size:18px;font-weigh
 .library-tools{display:flex;flex-wrap:wrap;align-items:center;gap:14px}
 .library-letters{display:flex;flex:1;flex-wrap:wrap;gap:4px;min-width:280px}
 .library-letters .mini{min-width:28px;padding:0 7px}
+
+.names-modal{max-width:1250px}.name-editor-toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.name-editor-fields{display:grid;grid-template-columns:2fr 1fr;gap:12px}.name-editor-fields label{display:flex;flex-direction:column;gap:5px;font-size:13px;color:var(--muted)}.name-editor-row{border-color:var(--line)}@media(max-width:750px){.name-editor-fields{grid-template-columns:1fr}}
