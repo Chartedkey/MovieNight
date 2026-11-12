@@ -87,6 +87,7 @@ class Service {
   }
 
   loadSeed(seed) {
+    if ((this.state.nightTransfers || []).some(j => !['completed', 'dismissed'].includes(j.status))) throw new Error('Сначала заверши восстановление и закрой незавершённые переносы.');
     if (!seed || !Array.isArray(seed.groups) || !Array.isArray(seed.near)) {
       throw new Error('Это не файл начальных данных Movie Night.');
     }
@@ -802,6 +803,6 @@ class Service {
   }
 }
 
-Object.assign(Service.prototype, require('./director-names').directorNameMethods, require('./disks').diskMethods, require('./nights').nightMethods);
+Object.assign(Service.prototype, require('./director-names').directorNameMethods, require('./disks').diskMethods, require('./nights').nightMethods, require('./transfers').transferMethods);
 
 module.exports = { Service, findInFilmography, emptyState, filmKey, QUEUE_MIN, QUEUE_MAX, SHORT_MINUTES };

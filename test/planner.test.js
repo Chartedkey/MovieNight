@@ -79,3 +79,6 @@ test('подбор объясняет слишком короткий лимит
 test('отказ generateNight не меняет библиотеку, оценки, черновик и утверждённые ночи',()=>{
   const s=svc(),c=config();s.state.films.m1.rating=9;s.saveNightDraft(c);c.slots[0].attention='medium';Object.values(s.state.films).forEach(f=>delete f.nightTags);const before=JSON.stringify(s.state);const r=s.generateNight(c);assert.equal(r.ok,false);assert.match(r.message,/отметка внимания/);assert.equal(JSON.stringify(s.state),before);
 });
+
+// File transfer safety checks are part of the standard test command.
+require("./transfers.test");

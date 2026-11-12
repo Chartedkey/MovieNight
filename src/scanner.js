@@ -97,6 +97,7 @@ async function scanDir(dir, ctx, isRoot) {
   let entries;
   try {
     entries = await list(dir);
+    entries = entries.filter(e => !ctx.excluded.has(path.join(dir, e.name).toLowerCase()));
   } catch (e) {
     if (isRoot) throw e;
     ctx.errors.push(dir);
@@ -124,6 +125,7 @@ async function scanDir(dir, ctx, isRoot) {
   const files = [];
   const subdirs = [];
   for (const e of entries) {
+    if (ctx.excluded.has(path.join(dir, e.name).toLowerCase())) continue;
     if (e.isDirectory()) {
       if (!SKIP_DIRS.has(e.name.toLowerCase()) && !e.name.startsWith('.') && !ctx.excluded.has(path.join(dir, e.name).toLowerCase())) subdirs.push(e.name);
     } else if (e.isFile()) files.push(e.name);

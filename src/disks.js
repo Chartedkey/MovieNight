@@ -94,10 +94,14 @@ const diskMethods = {
   setAllConnected(v) { this.state.allConnected = !!v; this.save(); return this.state; },
 
   async scanAll(onlyPath) {
+    if (this.transferBusy) throw new Error('Дождись завершения переноса.');
     if (this.scanning) return this.state;
     this.scanning = true;
     this.state.scan = { running: true, current: null, found: 0, errors: [], offline: [] };
     const exclude = this.folders().filter((f) => f.role === 'exclude').map((f) => f.path);
+    for (const job of this.state.nightTransfers || []) {
+      if (!['completed', 'dismissed'].includes(job.status)) exclude.push(...(job.isFile ? job.files.map(f => f.target) : [job.target]));
+    }
     try {
       for (const folder of this.folders()) {
         if (folder.role === 'exclude' || (onlyPath && idOf(folder.path) !== idOf(onlyPath))) continue;

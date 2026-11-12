@@ -728,15 +728,26 @@ document.addEventListener('drop', (e) => { const r = e.target.closest('[data-ent
 
 bridge.onProgress((p) => { ui.progress = p; if (ui.state && ui.state.job && !['review', 'done'].includes(ui.state.job.phase)) render(); });
 if (bridge.onScan) bridge.onScan((sc) => { ui.scan = { running: true, current: sc.current, found: sc.found }; if (ui.screen === 'disks') render(); });
+if (bridge.onTransfer) bridge.onTransfer((p) => {
+  ui.transferProgress = p; ui.transferBusy = !['completed', 'failed'].includes(p.phase);
+  if (!ui.transferBusy) {
+    ui.transferCancelling = false;
+    bridge.call('getState').then(state => { ui.state = state; render(); }).catch(() => {});
+  }
+  if (ui.screen === 'night-prep') render();
+});
 bridge.onUpdate((u) => { ui.update = u; render(); });
 
 (async function start() {
   ui.version = await bridge.call('version');
   ui.hasKey = await bridge.call('hasKey');
   ui.state = await bridge.call('getState');
+  const transfer = await bridge.call('getNightTransferProgress');
+  ui.transferProgress = transfer;
+  ui.transferBusy = !!transfer.running;
   ui.review = ui.state.job ? await bridge.call('reviewList') : [];
   ui.progress = ui.state.job ? await bridge.call('progress') : null;
   render();
-  maybeRescue();
-  if ((ui.state.folders || []).length) runScan().catch(() => {});
+  if (!ui.transferBusy) maybeRescue();
+  if (!ui.transferBusy && (ui.state.folders || []).length) runScan().catch(() => {});
 }()).catch(fatal);

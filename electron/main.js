@@ -47,6 +47,7 @@ const makeTmdb = (key) => createTmdb({ key, fetchImpl: (url, opts) => net.fetch(
 
 // Методы, которые может вызывать интерфейс. Остальное в процесс не проникает.
 const SERVICE_METHODS = new Set(['resetNightDraft', 'saveNightDraft', 'generateNight', 'saveNightTemplate', 'removeNightTemplate', 'setNightTags', 'approveNight', 'reviseNight', 'setNightTask', 'setNightResult', 'rateNight', 'setRenamePreference', 'getState', 'loadSeed', 'runImport', 'stopImport', 'progress', 'reviewList', 'resolveItem', 'skipItem', 'searchForReview', 'directorFilms', 'addFolder', 'removeFolder', 'setFolderRole', 'setAllConnected', 'scanAll', 'updateFolderPath', 'confirmLost', 'chooseEntryFilm', 'addEntryFilm', 'ignoreEntry', 'unignoreEntry', 'unlinkEntry', 'entryIsFilm', 'excludeSeriesFolder', 'keepOnDisk', 'duplicateOk', 'duplicates', 'renamePlan', 'applyRename', 'undoRename', 'candidateInfo', 'rescueReview', 'setFilmStatus', 'rate', 'toggleRewatch', 'finishReview', 'setTitle', 'setLibrarySort', 'saveDirectorNameDraft', 'discardDirectorNameDraft', 'rebaseDirectorNameDraft', 'applyDirectorNames', 'undoDirectorNames', 'suggestDirectorNames', 'setDirectorName', 'refreshDirectorNames', 'toggleFav', 'ban', 'setWish', 'addWish', 'addNear', 'removeNear', 'moveNear', 'filmography', 'markFilm', 'finishMarkup', 'chooseNext', 'searchAdd', 'addFilm', 'addDirector']);
+for (const method of ['previewNightTransfer', 'executeNightTransfer', 'getNightTransferProgress', 'cancelNightTransfer', 'recoverNightTransfer', 'dismissNightTransfer']) SERVICE_METHODS.add(method);
 
 const local = {
   async hasKey() { return !!service.tmdb; },
@@ -100,10 +101,12 @@ app.whenReady().then(() => {
   service = new Service({ dir, onProgress: (p) => win && win.webContents.send('progress', p) });
   service.ffprobePath = ffprobePath();
   service.onScan = (p) => win && win.webContents.send('scan', p);
+  service.onTransfer = (p) => win && !win.isDestroyed() && win.webContents.send('transfer', p);
   const key = readKey();
   if (key) service.tmdb = makeTmdb(key);
 
   ipcMain.handle('api', async (_e, method, args) => {
+    if (service.transferBusy && !['getState', 'hasKey', 'reviewList', 'progress', 'getNightTransferProgress', 'cancelNightTransfer', 'openEntry', 'version', 'logPath'].includes(method)) throw new Error('Дождись завершения переноса. Другие изменения временно недоступны.');
     if (local[method]) return local[method](...args);
     if (SERVICE_METHODS.has(method)) return service[method](...args);
     throw new Error(`Неизвестный метод: ${method}`);
