@@ -27,4 +27,22 @@ jobs:
       - if: steps.check.outputs.skip == 'false'
         run: npm test
       - if: steps.check.outputs.skip == 'false'
-        run: npm run release
+        name: Собрать Windows без публикации
+        run: npx electron-builder --win --publish never
+      - if: steps.check.outputs.skip == 'false'
+        name: Проверить запуск перед публикацией
+        shell: bash
+        timeout-minutes: 2
+        run: |
+          export MN_SMOKE="$(pwd -W)/smoke.txt" MN_USERDATA="$(pwd -W)/smoke-data"
+          "dist/win-unpacked/Movie Night.exe" &
+          app_pid=$!
+          for i in $(seq 1 30); do [ -f smoke.txt ] && break; sleep 3; done
+          cat smoke.txt || true
+          cat smoke-data/movie-night.log || true
+          grep -q "Подключим TMDB" smoke.txt
+          grep -q "FFPROBE: ffprobe version" smoke.txt
+          wait "$app_pid"
+      - if: steps.check.outputs.skip == 'false'
+        name: Опубликовать проверенное приложение
+        run: npx electron-builder --win --prepackaged dist/win-unpacked --publish always
