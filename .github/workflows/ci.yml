@@ -12,7 +12,18 @@ jobs:
         with:
           node-version: 22
       - run: npm install
-      - run: npm test
+      - name: Проверить приложение
+        shell: bash
+        run: |
+          set +e
+          npm test 2>&1 | tee test-output.txt
+          result=${PIPESTATUS[0]}
+          {
+            echo '```text'
+            cat test-output.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$result"
       - run: npx electron-builder --win --publish never
       - name: Запустить собранную программу
         shell: bash
