@@ -251,3 +251,15 @@ test('каталог с расширением субтитров не счит�
   const p=await f.preview();assert.equal(p.files.length,2);assert.equal(p.dirs.length,0);
   assert.equal((await f.svc.executeNightTransfer(p.token)).ok,true);assert.equal(fs.readFileSync(path.join(dir,'unrelated.txt'),'utf8'),'keep');
 });
+
+test('раскрытие коротких имён Windows не меняет пути IO и ручные связи библиотеки', async t => {
+  const f = fixture(t, true), realpath = fs.promises.realpath;
+  t.mock.method(fs.promises, 'realpath', async p => {
+    const actual = await realpath(p);
+    return actual.replace(f.root, path.join(path.dirname(f.root), 'expanded-long-directory-name'));
+  });
+  const p = await f.preview(); assert.equal(p.source, f.source); assert.equal(p.target, f.target);
+  const r = await f.svc.executeNightTransfer(p.token); assert.equal(r.ok, true, r.error);
+  assert.equal(f.svc.state.files[f.target.toLowerCase()].video, path.join(f.target, 'movie.mkv'));
+  assert.equal(f.svc.state.files[f.target.toLowerCase()].filmKey, 'm1');
+});

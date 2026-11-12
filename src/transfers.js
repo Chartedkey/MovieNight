@@ -72,9 +72,12 @@ async function makePlan(service, nid, index, entryId, executing = false) {
   if (!['file', 'folder', 'dvd', 'bluray', 'parts'].includes(e.kind) || e.internalDiscRoot) throw Error('Эту запись нельзя перенести целиком. Выбери внешнюю папку фильма.');
   const today = service.folders().filter(f => f.role === 'today');
   if (today.length !== 1) throw Error('Назначь ровно одну папку с ролью «Сегодня» в разделе «Диски».');
-  const source = await safePath(e.path), root = await safePath(today[0].path);
+  // Windows realpath expands 8.3 names (e.g. RUNNER~1). Keep the paths used by
+  // the library for IO/remapping, and canonicalize only for alias containment.
+  const source = path.resolve(e.path), root = path.resolve(today[0].path);
+  const realSource = await safePath(source), realRoot = await safePath(root);
   if (!(await fs.promises.stat(root)).isDirectory()) throw Error('«Сегодня» должна быть папкой.');
-  if (inside(source, root) || inside(root, source)) throw Error('Источник и «Сегодня» совпадают или вложены друг в друга.');
+  if (inside(realSource, realRoot) || inside(realRoot, realSource)) throw Error('Источник и «Сегодня» совпадают или вложены друг в друга.');
   const sources = service.folders().filter(f => f.role !== 'exclude' && inside(source, f.path));
   if (!sources.length || service.folders().some(f => inside(f.path, source))) throw Error('Нельзя переносить корень подключённого источника или файл вне подключённых папок.');
   if (service.folders().some(f => f.role === 'exclude' && (inside(source, f.path) || inside(f.path, source)))) throw Error('Перенос затрагивает исключённую папку.');
