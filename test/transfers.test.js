@@ -263,3 +263,13 @@ test('раскрытие коротких имён Windows не меняет п�
   assert.equal(f.svc.state.files[f.target.toLowerCase()].video, path.join(f.target, 'movie.mkv'));
   assert.equal(f.svc.state.files[f.target.toLowerCase()].filmKey, 'm1');
 });
+
+test('удаление ночи отзывает предпросмотр без изменения исходника и субтитров', async t => {
+  const f=fixture(t),p=await f.preview(),before=structuredClone(f.svc.state);
+  f.svc.removeNight('night',true);
+  await assert.rejects(f.svc.executeNightTransfer(p.token), /Предпросмотр/);
+  assert.equal(fs.readFileSync(f.source,'utf8'),'movie content');
+  assert.equal(fs.readFileSync(f.sub,'utf8'),'subtitle content');
+  assert.equal(fs.existsSync(f.target),false);
+  for(const key of ['films','directors','near','files'])assert.deepEqual(f.svc.state[key],before[key],key);
+});

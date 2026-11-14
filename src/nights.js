@@ -17,10 +17,26 @@ const nightMethods={
     n.revisions=n.revisions||[];n.revisions.push({at:new Date().toISOString(),config:n.config,slots:n.slots,total:n.total});
     const old=n.slots;n.slots=checked.rows.map((r,i)=>({key:r.key,title:P.title(this.mustFilm(r.key)),year:this.mustFilm(r.key).year,runtime:r.runtime,reasons:r.reasons,index:i,result:null,rating:null}));
     n.tasks=Object.fromEntries(Object.entries(n.tasks).filter(([key])=>{const i=Number(key.split(':')[0]);return old[i]?.key===n.slots[i]?.key;}));n.config=clone(config);n.total=checked.total;n.unknownRuntime=checked.unknownRuntime;this.state.nightDraft=clone(config);delete this.state.nightDraft.editingNightId;this.save();return {state:this.state,nightId:nid};},
+  removeNight(nid,confirmed=false){
+    getNight(this,nid);
+    if(confirmed!==true)throw Error('Подтверди удаление сохранённой ночи.');
+    if(this.transferBusy)throw Error('Дождись завершения текущего переноса.');
+    if((this.state.nightTransfers||[]).some(j=>j.nid===nid&&!['completed','dismissed'].includes(j.status)))throw Error('Сначала восстанови исходник и закрой незавершённый перенос в подготовке этой ночи.');
+    const previous=this.state;
+    this.state={...previous,nights:previous.nights.filter(n=>n.id!==nid)};
+    if(this.state.activeNight===nid)this.state.activeNight=null;
+    if(this.state.nightDraft?.editingNightId===nid){this.state.nightDraft=clone(this.state.nightDraft);delete this.state.nightDraft.editingNightId;}
+    try{this.save();}catch(e){this.state=previous;throw e;}
+    for(const [token,saved] of this.transferPlans||[])if(saved.plan.nid===nid)this.transferPlans.delete(token);
+    return this.state;
+  },
   setNightTask(nid,key,done){const n=getNight(this,nid);if(typeof key!=='string'||key.length>250||typeof done!=='boolean')throw Error('Некорректная задача.');n.tasks[key]=done;this.save();return this.state;},
   setNightResult(nid,index,result){if(![null,'watched','dropped','skipped'].includes(result))throw Error('Некорректный результат.');const {n,slot}=getSlot(this,nid,index);if(slot.result===result)return this.state;
     if((this.state.nights||[]).some(other=>this.state.nights.indexOf(other)>this.state.nights.indexOf(n)&&other.slots.some(x=>x.key===slot.key&&['watched','dropped'].includes(x.result))))throw Error('У фильма есть более поздний просмотр. Разбери его перед изменением старой отметки.');
     const f=this.mustFilm(slot.key);
+    // Deleted plans leave their viewings in the film history. They still protect later results.
+    const viewing=(f.watched||[]).findIndex(w=>w.nightId===nid&&w.slot===index);
+    if(slot.before&&viewing>=0&&(f.watched||[]).slice(viewing+1).some(w=>['watched','dropped'].includes(w.result)))throw Error('У фильма есть более поздний просмотр. Разбери его перед изменением старой отметки.');
     const changesFilm=!!slot.before||['watched','dropped'].includes(result);
     if(slot.before){f.watched=(f.watched||[]).filter(w=>!(w.nightId===nid&&w.slot===index));if(f.status===slot.result){f.status=slot.before.status;f.pending=slot.before.pending;}
       if(slot.ratingEdited&&f.rating===slot.rating)f.rating=slot.before.rating;

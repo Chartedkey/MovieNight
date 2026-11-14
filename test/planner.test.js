@@ -79,3 +79,106 @@ test('подбор объясняет слишком короткий лимит
 test('отказ generateNight не меняет библиотеку, оценки, черновик и утверждённые ночи',()=>{
   const s=svc(),c=config();s.state.films.m1.rating=9;s.saveNightDraft(c);c.slots[0].attention='medium';Object.values(s.state.films).forEach(f=>delete f.nightTags);const before=JSON.stringify(s.state);const r=s.generateNight(c);assert.equal(r.ok,false);assert.match(r.message,/отметка внимания/);assert.equal(JSON.stringify(s.state),before);
 });
+
+test('удаление ночи требует явного подтверждения и не меняет базу при отказе',()=>{
+  const s=svc(),c=config(1);c.slots[0].film='m1';const id=s.approveNight(c,'2026-11-04').nightId;
+  const before=structuredClone(s.state),disk=fs.readFileSync(s.file,'utf8');
+  for(const confirmed of [undefined,false,'true',1])assert.throws(()=>s.removeNight(id,confirmed),/Подтверди/);
+  assert.throws(()=>s.removeNight('missing',true),/не найдена/);
+  assert.deepEqual(s.state,before);assert.equal(fs.readFileSync(s.file,'utf8'),disk);
+});
+
+test('удаление разобранной ночи сохраняет просмотры, оценки, очередь, ближайшие и настоящие файлы после перезапуска',()=>{
+  const s=svc(),c=config(3);c.slots.forEach((slot,i)=>slot.film=`m${i+1}`);
+  const id=s.approveNight(c,'2026-11-04').nightId;
+  s.setNightResult(id,0,'watched');s.rateNight(id,0,8);s.setNightResult(id,1,'dropped');s.rateNight(id,1,6);s.setNightResult(id,2,'skipped');
+  const file=path.join(s.dir,'movie.mkv'),sub=path.join(s.dir,'movie.ru.srt');fs.writeFileSync(file,'movie bytes');fs.writeFileSync(sub,'subtitle bytes');
+  s.state.files.local={id:'local',path:file,filmKey:'m1',state:'linked'};
+  s.state.nightTransfers=[{id:'done',nid:id,status:'completed',source:file,target:file},{id:'closed',nid:id,status:'dismissed'}];s.save();
+  const before=structuredClone(s.state);s.removeNight(id,true);
+  const expected={...before,nights:[],activeNight:null};assert.deepEqual(s.state,expected);
+  assert.deepEqual(new Service({dir:s.dir}).state,expected);
+  assert.equal(fs.readFileSync(file,'utf8'),'movie bytes');assert.equal(fs.readFileSync(sub,'utf8'),'subtitle bytes');
+  assert.equal(s.state.films.m1.watched[0].nightId,id);assert.equal(s.state.films.m1.rating,8);assert.equal(s.state.films.m2.rating,6);assert.equal(s.state.films.m3.status,'queue');
+});
+
+test('удаление выбранного плана очищает только его ссылки, сохраняя черновик, шаблоны и другие ночи',()=>{
+  const s=svc(),c=config(1);c.slots[0].film='m1';const first=s.approveNight(c,'2026-11-04').nightId;
+  const second=s.approveNight(c,'2026-11-05').nightId;s.saveNightTemplate('Шаблон',c);c.editingNightId=first;s.saveNightDraft(c);
+  const before=structuredClone(s.state);s.removeNight(first,true);
+  const expected=structuredClone(before);expected.nights=expected.nights.filter(n=>n.id!==first);delete expected.nightDraft.editingNightId;
+  assert.deepEqual(s.state,expected);assert.equal(s.state.activeNight,second);
+  assert.deepEqual(new Service({dir:s.dir}).state,expected);
+});
+
+test('незавершённый перенос блокирует удаление своей ночи и сохраняет журнал восстановления',()=>{
+  for(const status of ['copying','verifying','deleting','failed','needs-recovery']){
+    const s=svc(),c=config(1);c.slots[0].film='m1';const id=s.approveNight(c,'2026-11-04').nightId;
+    s.state.nightTransfers=[{id:'job',nid:id,status,sourceRestored:true}];s.save();
+    const before=structuredClone(s.state);assert.throws(()=>s.removeNight(id,true),/незавершённый перенос/);assert.deepEqual(s.state,before);
+    assert.deepEqual(new Service({dir:s.dir}).state,before);
+  }
+});
+
+test('идущий перенос блокирует удаление, журнал другой ночи не мешает и не исчезает',()=>{
+  const s=svc(),c=config(1);c.slots[0].film='m1';const id=s.approveNight(c,'2026-11-04').nightId;
+  s.transferBusy=true;assert.throws(()=>s.removeNight(id,true),/переноса/);s.transferBusy=false;
+  s.state.nightTransfers=[{id:'other-job',nid:'other-night',status:'needs-recovery'}];s.removeNight(id,true);
+  assert.deepEqual(s.state.nightTransfers,[{id:'other-job',nid:'other-night',status:'needs-recovery'}]);
+});
+
+test('ошибка записи при удалении оставляет план и его предпросмотр доступными',t=>{
+  const s=svc(),c=config(1);c.slots[0].film='m1';const id=s.approveNight(c,'2026-11-04').nightId;
+  s.transferPlans=new Map([['token',{plan:{nid:id}}]]);const before=structuredClone(s.state);
+  t.mock.method(s,'save',()=>{throw Error('disk full');});assert.throws(()=>s.removeNight(id,true),/disk full/);
+  assert.deepEqual(s.state,before);assert.deepEqual(new Service({dir:s.dir}).state,before);assert.ok(s.transferPlans.has('token'));
+});
+
+test('после удаления старый предпросмотр переноса отзывается, чужой сохраняется',()=>{
+  const s=svc(),c=config(1);c.slots[0].film='m1';const id=s.approveNight(c,'2026-11-04').nightId;
+  s.transferPlans=new Map([['old',{plan:{nid:id}}],['other',{plan:{nid:'other-night'}}]]);s.removeNight(id,true);
+  assert.deepEqual([...s.transferPlans.keys()],['other']);
+});
+
+test('удаление более поздней ночи не позволяет отменить ранний просмотр и потерять сохранённую оценку',()=>{
+  const s=svc(),c=config(1);c.slots[0].film='m1';const first=s.approveNight(c,'2026-11-04').nightId;
+  s.setNightResult(first,0,'watched');s.rateNight(first,0,7);s.state.films.m1.rewatch=true;c.rewatch=true;
+  const second=s.approveNight(c,'2026-11-05').nightId;s.setNightResult(second,0,'watched');s.rateNight(second,0,9);s.removeNight(second,true);
+  const restored=new Service({dir:s.dir}),before=structuredClone(restored.state);
+  assert.throws(()=>restored.setNightResult(first,0,null),/поздний просмотр/);assert.deepEqual(restored.state,before);
+});
+
+function nightRenderer(s){
+  const vm=require('node:vm'),actions=new Map(),calls=[];
+  const ui={state:structuredClone(s.state),screen:'night',nightEditing:null};
+  const context=vm.createContext({ui,NightPlanner:P,document:{addEventListener(){}},render(){},
+    esc:value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),
+    on:fn=>{const id=`a${actions.size}`;actions.set(id,fn);return id;},
+    call:async(method,...args)=>{calls.push([method,...args]);return structuredClone(s[method](...args));}});
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../renderer/night-ui.js'),'utf8'),context);
+  return {ui,calls,html:expression=>vm.runInContext(expression,context),click:async(html,label)=>{
+    const button=[...html.matchAll(/<button\b[^>]*data-a="([^"]+)"[^>]*>([^<]*)<\/button>/g)].find(m=>m[2]===label);
+    assert.ok(button,`button ${label} exists`);await actions.get(button[1])();
+  }};
+}
+
+test('интерфейс удаления: открытие и отмена не вызывают сервис, подтверждение удаляет только выбранную ночь',async()=>{
+  const s=svc(),c=config(1);c.slots[0].film='m1';s.state.films.m1.userTitle='<script>личное имя</script>';
+  const id=s.approveNight(c,'2026-11-04').nightId,r=nightRenderer(s),before=structuredClone(s.state);
+  await r.click(r.html('nightHistory()'),'Удалить ночь');assert.equal(r.ui.modal.nid,id);assert.equal(r.calls.length,0);
+  const modal=r.html('nightModal()');assert.match(modal,/&lt;script&gt;личное имя&lt;\/script&gt;/);assert.match(modal,/Просмотры и оценки фильмов, очередь, ближайшие и все файлы сохранятся/);
+  await r.click(modal,'Отмена');assert.equal(r.ui.modal,null);assert.deepEqual(s.state,before);assert.equal(r.calls.length,0);
+  r.ui.nightView=id;r.ui.screen='night-prep';r.ui.nightEditing=id;r.ui.nightEdit={...structuredClone(c),editingNightId:id};
+  await r.click(r.html('nRemoveButton(ui.state.nights[0])'),'Удалить ночь');
+  await r.click(r.html('nightModal()'),'Да, удалить ночь');
+  assert.deepEqual(r.calls,[['removeNight',id,true]]);assert.equal(s.state.nights.length,0);assert.equal(r.ui.modal,null);
+  assert.equal(r.ui.nightView,null);assert.equal(r.ui.nightEditing,null);assert.equal(r.ui.nightEdit.editingNightId,undefined);assert.equal(r.ui.screen,'night');assert.equal(r.ui.nightRemoving,false);
+});
+
+test('интерфейс удаления сохраняет диалог и план при ошибке переноса',async()=>{
+  const s=svc(),c=config(1);c.slots[0].film='m1';const id=s.approveNight(c,'2026-11-04').nightId;
+  s.state.nightTransfers=[{id:'job',nid:id,status:'needs-recovery'}];const r=nightRenderer(s);
+  await r.click(r.html('nightHistory()'),'Удалить ночь');
+  await assert.rejects(r.click(r.html('nightModal()'),'Да, удалить ночь'),/незавершённый перенос/);
+  assert.equal(r.ui.modal.nid,id);assert.equal(r.ui.nightRemoving,false);assert.equal(s.state.nights.length,1);
+});
