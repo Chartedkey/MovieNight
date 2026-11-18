@@ -26,6 +26,7 @@
     if(typeof c.repeat!=='boolean'||typeof c.rewatch!=='boolean'||typeof c.allowFilmography!=='boolean')throw Error('Некорректные переключатели.');
     if(!Array.isArray(c.slots)||c.slots.length!==c.count)throw Error('Число мест не совпадает с настройками.');
     if(!Number.isInteger(c.nearCount)||c.nearCount<0||c.nearCount>c.count)throw Error('Проверь количество из ближайших.');
+    if(c.rejectedFilms!==undefined&&(!Array.isArray(c.rejectedFilms)||c.rejectedFilms.some(k=>typeof k!=='string'||!k)))throw Error('Некорректный список отклонённых фильмов.');
     for(const s of c.slots){if(!s||typeof s.locked!=='boolean'||typeof s.country!=='string'||!(s.country==='any'||/^[A-Z]{2}$/.test(s.country))||!oneOf(s.source,['inherit','near','rest','rewatch'])||!oneOf(s.region,['any',...Object.keys(REGIONS)])||!oneOf(s.weight,['any','light','medium','heavy'])||!oneOf(s.attention,['any','easy','medium','focused'])||!(s.genre==='any'||s.genre==='crime-thriller'||s.genre==='noir'||s.genre==='neonoir'||Object.hasOwn(GENRES,s.genre)))throw Error('Проверь условия места.');}
     return c;
   }
@@ -115,9 +116,11 @@
   function generate(state,input,{replace=null,seed=0,maxNodes=100000,timeBudgetMs=700}={}) {
     const c=validate(JSON.parse(JSON.stringify(input)));
     if(replace!==null&&(!Number.isInteger(replace)||replace<0||replace>=c.count||c.slots[replace].locked))throw Error('Сначала открепи место для замены.');
+    const rejected=new Set(c.rejectedFilms||[]);
+    if(replace!==null&&c.slots[replace].film){rejected.add(c.slots[replace].film);c.rejectedFilms=[...rejected];}
     const pools=c.slots.map((s,i)=>{
       const keep=s.locked||replace!==null&&i!==replace;
-      const all=candidates(state,c,s);return all.filter(f=>keep?f.key===s.film:!(i===replace&&f.key===s.film)).map(f=>({...f,rank:f.score+((Number(String(f.key).replace(/\D/g,''))||0)*31+seed*17+i*7)%29/10})).sort((a,b)=>b.rank-a.rank);
+      const all=candidates(state,c,s);return all.filter(f=>keep?f.key===s.film:!rejected.has(f.key)).map(f=>({...f,rank:f.score+((Number(String(f.key).replace(/\D/g,''))||0)*31+seed*17+i*7)%29/10})).sort((a,b)=>b.rank-a.rank);
     });
     const empty=pools.findIndex(p=>!p.length);
     if(empty>=0){
@@ -125,7 +128,7 @@
       let message=diagnosis.summary,kind='filters';
       if(slot.locked||replace!==null&&empty!==replace){
         kind='kept';message=!slot.film?'Место ещё не заполнено. Сначала подбери всю ночь или выбери фильм вручную.':`Сохранённый фильм не подходит: ${explainFilm(state,c,slot,slot.film).join('; ')}. Открепи его или измени условия.`;
-      }else if(empty===replace&&diagnosis.rows.length){kind='replacement';message='Другого варианта нет: текущим условиям соответствует только выбранный фильм.';}
+      }else if(diagnosis.rows.length&&rejected.size){kind='replacement';message='Другого варианта нет: подходящие фильмы уже отклонены для этой ночи. Измени условия или нажми «Сбросить всё», чтобы начать новый подбор.';}
       return {ok:false,message:`Место ${empty+1}: ${message}`,issue:{kind,index:empty,diagnosis},config:c};
     }
     const order=pools.map((_,i)=>i).sort((a,b)=>pools[a].length-pools[b].length),chosen=Array(c.count).fill(null);

@@ -182,3 +182,60 @@ test('интерфейс удаления сохраняет диалог и п�
   await assert.rejects(r.click(r.html('nightModal()'),'Да, удалить ночь'),/незавершённый перенос/);
   assert.equal(r.ui.modal.nid,id);assert.equal(r.ui.nightRemoving,false);assert.equal(s.state.nights.length,1);
 });
+
+test('другой вариант перебирает все фильмы без повторов и останавливается при исчерпании',()=>{
+  const s=state();let c=P.generate(s,config(1)).config;const seen=new Set([c.slots[0].film]);
+  for(let i=0;i<7;i++){
+    const before=structuredClone(c),r=P.generate(s,c,{replace:0,seed:i});assert.equal(r.ok,true);
+    assert.deepEqual(c,before);assert.ok(!seen.has(r.config.slots[0].film));
+    assert.deepEqual(new Set(r.config.rejectedFilms),seen);seen.add(r.config.slots[0].film);c=r.config;
+  }
+  const exhausted=P.generate(s,c,{replace:0});assert.equal(exhausted.ok,false);assert.equal(seen.size,8);
+  assert.equal(exhausted.config.rejectedFilms.length,8);assert.match(exhausted.message,/уже отклонены/);
+  const again=P.generate(s,exhausted.config);assert.equal(again.ok,false);assert.match(again.message,/Сбросить всё/);
+});
+
+test('отказ действует на всю ночь при пересборке, смене условий и перестановке мест',()=>{
+  const s=state(),c=P.generate(s,config(2)).config,old=c.slots[0].film;
+  let r=P.generate(s,c,{replace:0});assert.equal(r.ok,true);assert.equal(r.config.slots[1].film,c.slots[1].film);
+  r.config.slots.reverse();r.config.source='all';r.config.repeat=true;r.config.limit=0;
+  r=P.generate(s,r.config,{seed:99});assert.equal(r.ok,true);assert.ok(!r.config.slots.some(s=>s.film===old));
+  r=P.generate(s,r.config,{replace:1,seed:1});assert.equal(r.ok,true);assert.ok(!r.config.slots.some(s=>s.film===old));
+});
+
+test('сохраняются закрепления, строгие условия, совместимость старого черновика и проверка сохранённого набора',()=>{
+  const s=state(),c=P.generate(s,config(2)).config;c.slots[1].locked=true;const fixed=c.slots[1].film;
+  const r=P.generate(s,c,{replace:0});assert.equal(r.ok,true);assert.equal(r.config.slots[1].film,fixed);
+  assert.deepEqual(P.check(s,r.config).errors,[]);assert.throws(()=>P.generate(s,r.config,{replace:1}),/открепи/);
+  const refused=c.slots[0].film;r.config.slots[0].film=refused;
+  assert.deepEqual(P.check(s,r.config).errors,[]); // The unchanged card remains valid when no replacement was found.
+  const strict={...r.config,availability:'only'};assert.equal(P.generate(s,strict).ok,false);
+  assert.doesNotThrow(()=>P.validate(config()));
+  for(const rejectedFilms of [null,'m1',[null],[1],['']])assert.throws(()=>P.validate({...config(),rejectedFilms}),/отклонённых/);
+});
+
+test('отказы переживают перезапуск, но не переносятся в шаблон и очищаются сбросом',()=>{
+  const s=svc(),c=P.generate(s.state,config(1)).config;s.saveNightDraft(c);
+  const before=structuredClone(s.state),r=s.generateNight(c,{replace:0});assert.equal(r.ok,true);
+  for(const key of Object.keys(before).filter(k=>k!=='nightDraft'))assert.deepEqual(s.state[key],before[key],key);
+  const restored=new Service({dir:s.dir});assert.deepEqual(restored.state.nightDraft.rejectedFilms,[c.slots[0].film]);
+  restored.saveNightTemplate('Условия',restored.state.nightDraft);assert.equal(restored.state.nightTemplates[0].config.rejectedFilms,undefined);
+  restored.resetNightDraft();assert.equal(restored.state.nightDraft.rejectedFilms,undefined);
+  const fresh=restored.generateNight({...config(1),slots:[{...P.slot(),director:String(s.state.films[c.slots[0].film].dir)}]});
+  assert.equal(fresh.ok,true);assert.equal(fresh.config.slots[0].film,c.slots[0].film);
+});
+
+test('без альтернатив отказ сохраняется на диске, не меняя выбранный набор и библиотеку',()=>{
+  const s=svc(),c=config(1);c.availability='only';c.slots[0].film='m5';s.saveNightDraft(c);
+  const before=structuredClone(s.state),r=s.generateNight(c,{replace:0});assert.equal(r.ok,false);
+  assert.deepEqual(r.config.slots,c.slots);assert.deepEqual(new Service({dir:s.dir}).state.nightDraft.rejectedFilms,['m5']);
+  for(const key of Object.keys(before).filter(k=>k!=='nightDraft'))assert.deepEqual(s.state[key],before[key],key);
+  const retry=s.generateNight(r.config,{replace:0});assert.deepEqual(retry.config.rejectedFilms,['m5']);
+});
+
+test('renderer сохраняет отказы и сообщение при исчерпании, повторный клик не возвращает фильм',async()=>{
+  const s=svc(),c=config(1);c.availability='only';c.slots[0].film='m5';s.saveNightDraft(c);const r=nightRenderer(s);
+  await r.html('nGenerate(0)');assert.deepEqual(r.ui.nightEdit.rejectedFilms,['m5']);assert.match(r.ui.nightMessage,/уже отклонены/);assert.equal(r.ui.nightBusy,false);assert.equal(r.html('nSelect(null,0).length'),0);
+  await r.html('nGenerate(0)');assert.deepEqual(r.ui.nightEdit.rejectedFilms,['m5']);assert.match(r.ui.nightMessage,/уже отклонены/);
+  await r.html('nReset()');assert.equal(r.ui.nightEdit.rejectedFilms,undefined);assert.equal(r.ui.nightMessage,null);
+});
