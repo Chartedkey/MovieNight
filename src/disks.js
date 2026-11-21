@@ -95,16 +95,17 @@ const diskMethods = {
 
   async scanAll(onlyPath) {
     if (this.transferBusy) throw new Error('Дождись завершения переноса.');
+    if(onlyPath&&this.folders().some(f=>f.role==='archive'&&idOf(f.path)===idOf(onlyPath)))return this.checkArchive(onlyPath);
     if (this.scanning) return this.state;
     this.scanning = true;
     this.state.scan = { running: true, current: null, found: 0, errors: [], offline: [] };
-    const exclude = this.folders().filter((f) => f.role === 'exclude').map((f) => f.path);
+    const exclude = this.folders().filter((f) => ['exclude','archive'].includes(f.role)).map((f) => f.path);
     for (const job of this.state.nightTransfers || []) {
       if (!['completed', 'dismissed'].includes(job.status)) exclude.push(...(job.isFile ? job.files.map(f => f.target) : [job.target]));
     }
     try {
       for (const folder of this.folders()) {
-        if (folder.role === 'exclude' || (onlyPath && idOf(folder.path) !== idOf(onlyPath))) continue;
+        if (['exclude','archive'].includes(folder.role) || (onlyPath && idOf(folder.path) !== idOf(onlyPath))) continue;
         await this.scanOne(folder, exclude);
       }
       await this.probeAll();
@@ -207,7 +208,7 @@ const diskMethods = {
   },
 
   async probeAll() {
-    const todo = Object.values(this.entries()).filter((e) => !e.probed && e.kind !== 'series');
+    const todo = Object.values(this.entries()).filter((e) => !e.probed && e.role!=='archive' && e.kind !== 'series');
     let n = 0;
     for (const e of todo) {
       n += 1;

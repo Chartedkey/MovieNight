@@ -205,14 +205,11 @@ function wishlist() {
 }
 
 function downloadList() {
-  const nearIds = new Set(ui.state.near.flatMap((e) => e.ids));
-  return Object.values(ui.state.films).filter((f) => ['queue', 'reserve'].includes(f.status) && !(ui.files.get(f.key) || []).length).sort((a, b) => Number(nearIds.has(b.key)) - Number(nearIds.has(a.key)) || Number(a.status === 'reserve') - Number(b.status === 'reserve') || titleOf(a).localeCompare(titleOf(b), 'ru'));
+  const nearIds=new Set(ui.state.near.flatMap(e=>e.ids));
+  return ArchiveCatalog.pending(ui.state).sort((a,b)=>Number(nearIds.has(b.key))-Number(nearIds.has(a.key))||Number(a.status==='reserve')-Number(b.status==='reserve')||titleOf(a).localeCompare(titleOf(b),'ru'));
 }
 function download() {
-  const nearIds = new Set(ui.state.near.flatMap((e) => e.ids));
-  const list = downloadList();
-  const note = (ui.state.folders || []).length ? (ui.state.allConnected ? 'Как только файл появится на диске и пройдёт сканирование, фильм исчезнет из списка.' : 'Подключены не все диски: часть этих фильмов может лежать на других. Отметь «Подключены все диски» в разделе «Диски», когда добавишь их.') : 'Диски ещё не подключены, поэтому здесь пока весь список.';
-  return `<div class="head"><div><h1>Скачать</h1><div class="sub">Фильмов: ${list.length}. ${note}</div></div></div><div class="list">${list.slice(0, ui.shown).map((f) => `<div class="film" data-film="${f.key}"><div class="fwrap">${posterHtml(f.poster)}<div><div class="ftitle">${filmLine(f)}</div><div class="fmeta">${esc((ui.state.directors[f.dir] || {}).name || '')} · ${nearIds.has(f.key) ? 'в ближайших' : 'в очереди режиссёра'}</div></div></div><div class="row"><button class="mini" data-a="${on(() => call('openExternal', f.kpLink || kpSearch(f)))}">Кинопоиск</button><button class="mini" data-a="${on(() => doState('setFilmStatus', f.key, 'notfound'))}">Не нашёл</button></div></div>`).join('')}</div>${list.length > ui.shown ? `<button class="btn" data-a="${on(() => { ui.shown += 40; render(); })}">Показать ещё</button>` : ''}`;
+  return archiveDownload();
 }
 const kpSearch = (f) => `https://www.kinopoisk.ru/index.php?kp_query=${encodeURIComponent(`${f.originalTitle || titleOf(f)} ${f.year || ''}`)}`;
 
@@ -261,7 +258,7 @@ async function pickAndAdd(role) {
   const p = await call('pickFolder');
   if (!p) return;
   await doState('addFolder', p, role);
-  if (role !== 'exclude') runScan(p);
+  if (!['exclude','archive'].includes(role)) runScan(p);
 }
 function orphanNeedsLoad(e) {
   if (ui.orphanErrors && ui.orphanErrors[e.id]) return false;
@@ -449,11 +446,11 @@ function disks() {
   const tabs = [['folders', 'Папки', 0], ['orphans', 'Нужно разобрать', orphans.length], ['stored', 'Учтены на диске', Object.values(s.films).filter((f) => f.status === 'disk').length], ['dups', 'Дубли', ui.dups.length], ['series', 'Похоже на сериал', series.length], ['ignored', 'Игнорируемые', es.filter((e) => e.state === 'ignored').length], ['rename', 'Названия', ui.plan.length]];
   const tabHtml = `<div class="row">${tabs.map((t) => `<button class="chip ${ui.diskTab === t[0] ? 'on' : ''}" data-a="${on(() => { ui.diskTab = t[0]; render(); if (t[0] === 'orphans') loadOrphans(); })}">${t[1]}${t[2] ? ` · ${t[2]}` : ''}</button>`).join('')}</div>`;
   const lost = Object.values(s.lost || {}).map((l) => `<div class="error"><h3>Потеряно фильмов: ${l.count}. Обнови путь</h3><div class="sub" style="color:#f4d9c8">Папка ${esc(l.path)}: ${esc(l.reason)}. Пока ты не ответишь, задачи не закрываются, а эти фильмы не считаются пропавшими.</div><div class="row" style="margin-top:8px"><button class="btn primary" data-a="${on(async () => { const p = await call('pickFolder'); if (p) { ui.scan = { running: true, current: 'Сканирую новый путь', found: 0 }; render(); await call('updateFolderPath', l.path, p); await refresh(); ui.scan = null; await loadDiskExtras(); render(); } })}">Обновить путь</button><button class="btn" data-a="${on(() => runScan(l.path))}">Проверить снова</button><button class="btn ghost" data-a="${on(async () => { await call('confirmLost', l.path); await refresh(); await loadDiskExtras(); })}">Да, я их убрал</button></div></div>`).join('');
-  const roleNames = { normal: 'Обычная', today: '«Сегодня»', exclude: 'Исключить' };
+  const roleNames = { normal: 'Обычная', archive: 'Резервный NAS', today: '«Сегодня»', exclude: 'Исключить' };
   const stat = { ok: 'Сканирована', offline: 'Недоступна', suspicious: 'Нужна проверка' };
   let body = '';
   if (ui.diskTab === 'folders') {
-    body = `<section class="card"><div class="row between"><h2>Папки с фильмами</h2><div class="row"><button class="btn primary" data-a="${on(() => pickAndAdd('normal'))}">Добавить папку</button><button class="btn" data-a="${on(() => pickAndAdd('exclude'))}">Исключить папку</button><button class="btn" ${ui.scan ? 'disabled' : ''} data-a="${on(() => runScan())}">Сканировать всё</button></div></div>${(s.folders || []).map((f) => `<div class="film"><div><div class="ftitle">${esc(f.path)}</div><div class="fmeta">${f.role === 'exclude' ? 'Программа сюда не заходит' : `${stat[f.status] || 'Ещё не сканирована'}${f.count != null ? ` · найдено: ${f.count}` : ''}`}</div></div><div class="row" style="gap:4px">${Object.keys(roleNames).map((r) => `<button class="mini ${f.role === r ? 'on' : ''}" data-a="${on(() => doState('setFolderRole', f.path, r))}">${roleNames[r]}</button>`).join('')}<button class="mini" ${ui.scan ? 'disabled' : ''} data-a="${on(() => runScan(f.path))}">Сканировать</button><button class="mini" data-a="${on(() => doState('removeFolder', f.path))}">Убрать</button></div></div>`).join('') || '<div class="sub">Подключай по одной папке, например U:\\Фильмы. Программа только читает их и ничего не меняет без твоего подтверждения.</div>'}<label class="row" style="margin-top:6px"><input type="checkbox" id="allconn" ${s.allConnected ? 'checked' : ''}><span class="sub">Подключены все диски: можно точно считать, что остальное нужно скачать</span></label></section>`;
+    body = `<section class="card"><div class="row between"><h2>Папки с фильмами</h2><div class="row"><button class="btn primary" data-a="${on(() => pickAndAdd('normal'))}">Добавить папку</button><button class="btn" data-a="${on(() => pickAndAdd('archive'))}">Добавить резервную папку</button><button class="btn" data-a="${on(() => pickAndAdd('exclude'))}">Исключить папку</button><button class="btn" ${ui.scan ? 'disabled' : ''} data-a="${on(() => runScan())}">Сканировать всё</button></div></div>${(s.folders || []).map((f) => `<div class="film"><div><div class="ftitle">${esc(f.path)}</div><div class="fmeta">${f.role === 'exclude' ? 'Программа сюда не заходит' : `${f.role==='archive'?'Проверяется вручную по списку «Скачать»':stat[f.status] || 'Ещё не сканирована'}${f.count != null ? ` · найдено: ${f.count}` : ''}`}</div></div><div class="row" style="gap:4px">${Object.keys(roleNames).map((r) => `<button class="mini ${f.role === r ? 'on' : ''}" data-a="${on(() => doState('setFolderRole', f.path, r))}">${roleNames[r]}</button>`).join('')}<button class="mini" ${ui.scan ? 'disabled' : ''} data-a="${on(() => f.role==='archive'?runArchiveCheck(f.path):runScan(f.path))}">Сканировать</button><button class="mini" data-a="${on(() => doState('removeFolder', f.path))}">Убрать</button></div></div>`).join('') || '<div class="sub">Подключай по одной папке, например U:\\Фильмы. Программа только читает их и ничего не меняет без твоего подтверждения.</div>'}<label class="row" style="margin-top:6px"><input type="checkbox" id="allconn" ${s.allConnected ? 'checked' : ''}><span class="sub">Подключены все обычные диски; резервный NAS проверяется отдельно</span></label></section>`;
   }
   if (ui.diskTab === 'orphans') {
     body = `<div class="sub">Эти файлы пока не связаны с фильмами библиотеки. Выбери правильный фильм и действие: добавить в очередь или только учитывать на диске. Если фильм уже есть в библиотеке, кнопка «Это он» сохранит его очередь и отметки. «В ближайшие» подтверждает фильм для этого файла и добавляет его в ближайший просмотр. «Хочу посмотреть» только сохраняет интересный вариант на потом — файл остаётся в разборе.</div><div class="grid wide">${orphans.slice(0, ui.orphanShown).map(orphanCard).join('') || '<div class="card sub">Всё сопоставлено.</div>'}</div>${orphans.length > ui.orphanShown ? `<button class="btn" data-a="${on(() => { ui.orphanShown += 12; render(); loadOrphans(); })}">Показать ещё</button>` : ''}`;
@@ -727,7 +724,7 @@ document.addEventListener('dragover', (e) => { if (e.target.closest('[data-entry
 document.addEventListener('drop', (e) => { const r = e.target.closest('[data-entry]'); if (r && dragFrom) { e.preventDefault(); doState('moveNear', dragFrom, Number(r.dataset.idx)); dragFrom = null; } });
 
 bridge.onProgress((p) => { ui.progress = p; if (ui.state && ui.state.job && !['review', 'done'].includes(ui.state.job.phase)) render(); });
-if (bridge.onScan) bridge.onScan((sc) => { ui.scan = { running: true, current: sc.current, found: sc.found }; if (ui.screen === 'disks') render(); });
+if (bridge.onScan) bridge.onScan((sc) => { ui.scan = sc.running===false?null:{...sc,running:true}; if (['disks','download'].includes(ui.screen)) render(); });
 if (bridge.onTransfer) bridge.onTransfer((p) => {
   ui.transferProgress = p; ui.transferBusy = !['completed', 'failed'].includes(p.phase);
   if (!ui.transferBusy) {

@@ -211,4 +211,4 @@ function subtitleSummary(embedded, sidecarNames) {
   return { state: 'none', langs };
 }
 
-module.exports = { scanFolder, parseName, parseIfoSubtitles, subtitleSummary, sidecarLang, isRu, MIN_FILM_BYTES };
+module.exports = { VIDEO, SKIP_DIRS, BONUS_DIR, BONUS_FILE, EPISODE, PART, scanFolder, parseName, parseIfoSubtitles, subtitleSummary, sidecarLang, isRu, MIN_FILM_BYTES };

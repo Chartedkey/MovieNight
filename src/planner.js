@@ -30,7 +30,7 @@
     for(const s of c.slots){if(!s||typeof s.locked!=='boolean'||typeof s.country!=='string'||!(s.country==='any'||/^[A-Z]{2}$/.test(s.country))||!oneOf(s.source,['inherit','near','rest','rewatch'])||!oneOf(s.region,['any',...Object.keys(REGIONS)])||!oneOf(s.weight,['any','light','medium','heavy'])||!oneOf(s.attention,['any','easy','medium','focused'])||!(s.genre==='any'||s.genre==='crime-thriller'||s.genre==='noir'||s.genre==='neonoir'||Object.hasOwn(GENRES,s.genre)))throw Error('Проверь условия места.');}
     return c;
   }
-  function fileIsAvailable(state,e){return e.state==='linked'&&!Object.values(state.lost||{}).some(l=>within(e.path,l.path))&&!(state.folders||[]).some(d=>['offline','suspicious'].includes(d.status)&&within(e.path,d.path));}
+  function fileIsAvailable(state,e){return e.role!=='archive'&&e.state==='linked'&&!Object.values(state.lost||{}).some(l=>within(e.path,l.path))&&!(state.folders||[]).some(d=>['offline','suspicious'].includes(d.status)&&within(e.path,d.path));}
   const ATTENTION = ['easy','medium','focused'];
   const REASONS = {
     status:'Фильм не разрешён для просмотра или пересмотра', filmography:'Фильм только в фильмографии, вне активной библиотеки',

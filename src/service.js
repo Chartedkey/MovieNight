@@ -803,6 +803,6 @@ class Service {
   }
 }
 
-Object.assign(Service.prototype, require('./director-names').directorNameMethods, require('./disks').diskMethods, require('./nights').nightMethods, require('./transfers').transferMethods);
+Object.assign(Service.prototype, require('./director-names').directorNameMethods, require('./disks').diskMethods, require('./nights').nightMethods, require('./archive').archiveMethods, require('./transfers').transferMethods);
 
 module.exports = { Service, findInFilmography, emptyState, filmKey, QUEUE_MIN, QUEUE_MAX, SHORT_MINUTES };

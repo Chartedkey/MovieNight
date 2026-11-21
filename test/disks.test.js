@@ -394,6 +394,8 @@ function orphanRenderer(invoke) {
       onProgress() {}, onScan() {}, onUpdate() {},
     } },
   });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/archive.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../renderer/archive-ui.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/planner.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../renderer/night-ui.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/director-identity.js'), 'utf8'), context);
@@ -857,4 +859,176 @@ test('подбор ночи дожидается отправленного со
   const calls=[];const r=orphanRenderer(async(method)=>{calls.push(method);return {ok:false,message:'Нет ручных отметок',state:{films:{},directors:{},files:{},near:[]}};});
   r.run("ui.nightEdit=NightPlanner.defaults();ui.nightSaving=new Promise(resolve=>{globalThis.finishNightSaving=resolve;})");
   const pending=r.run('nGenerate()');assert.deepEqual(calls,[]);r.run('finishNightSaving()');await pending;assert.deepEqual(calls,['generateNight']);assert.equal(r.run('ui.nightBusy'),false);assert.equal(r.run('ui.nightMessage'),'Нет ручных отметок');
+});
+
+// Archive checks use temporary sparse files, never the user's NAS or TMDB.
+function archiveFixture(t){
+  const s=svc({m1:film(1,'Первый',2001),m2:film(2,'Второй',2002),m3:film(3,'Третий',2003)});
+  const root=tmp(),a=path.join(root,'archive-a'),b=path.join(root,'archive-b');fs.mkdirSync(a);fs.mkdirSync(b);
+  s.addFolder(a,'archive');s.addFolder(b,'archive');
+  t.after(()=>{fs.rmSync(root,{recursive:true,force:true});fs.rmSync(s.dir,{recursive:true,force:true});});
+  return {s,root,a,b,A:require('../src/archive')};
+}
+
+test('резервный NAS: несколько папок, все пути, только фильмы из Скачать и неизменность библиотеки',async t=>{
+  const {s,a,b,A}=archiveFixture(t);big(path.join(a,'Первый (2001).mkv'));big(path.join(b,'Первый (2001).avi'));big(path.join(b,'Второй (2002).mkv'));big(path.join(a,'Посторонний (1999).mkv'));
+  const before=structuredClone(s.state);s.tmdb={get(){throw Error('No TMDB allowed');}};
+  s.ffprobePath='must-not-run';await s.checkArchive();
+  assert.equal(A.groups(s.state).found.length,2);assert.equal(A.groups(s.state).missing.length,1);assert.equal(A.hits(s.state,'m1').length,2);
+  assert.equal(Object.values(s.state.archiveEntries).length,3);assert.deepEqual(s.state.files,before.files);
+  for(const key of ['films','directors','near','folders'])assert.deepEqual(s.state[key],before[key],key);
+  assert.deepEqual(new Service({dir:s.dir}).state.archiveEntries,s.state.archiveEntries);
+});
+
+test('резервный NAS не сканируется при обычном запуске и не попадает в разбор',async t=>{
+  const {s,a}=archiveFixture(t);big(path.join(a,'Первый (2001).mkv'));
+  await s.scanAll();assert.equal(Object.keys(s.entries()).length,0);assert.equal(s.state.archiveEntries,undefined);
+  await s.scanAll(a);assert.equal(Object.values(s.state.archiveEntries).length,1);assert.equal(Object.keys(s.entries()).length,0);
+});
+
+test('резервная папка внутри обычной исключается из общего обхода',async t=>{
+  const {s,root,a}=archiveFixture(t);big(path.join(a,'Первый (2001).mkv'));s.addFolder(root,'normal');
+  await s.scanAll();assert.equal(Object.keys(s.entries()).length,0);
+});
+
+test('выключенный NAS сохраняет пути и даты прошлой проверки после перезапуска',async t=>{
+  const {s,a,b,A}=archiveFixture(t);big(path.join(a,'Первый (2001).mkv'));await s.checkArchive(a);
+  const before=structuredClone(s.state.archiveEntries);fs.renameSync(a,a+'-offline');await s.checkArchive(a);
+  assert.equal(s.state.archiveChecks[A.canonical(a)].status,'offline');assert.deepEqual(s.state.archiveEntries,before);
+  const restored=new Service({dir:s.dir});assert.equal(A.groups(restored.state).found.length,1);assert.deepEqual(restored.state.archiveEntries,before);
+  // An inaccessible first root does not prevent checking a second root.
+  big(path.join(b,'Второй (2002).mkv'));await s.checkArchive();assert.equal(A.groups(s.state).found.length,2);
+});
+
+test('одинаковые названия, отсутствие года и соседний год требуют подтверждения',async t=>{
+  const {s,a,A}=archiveFixture(t);s.state.films.m4=film(4,'Первый',2001,{status:'watched'});
+  big(path.join(a,'Первый (2001).mkv'));big(path.join(a,'Второй.mkv'));big(path.join(a,'Третий (2004).mkv'));
+  await s.checkArchive(a);assert.equal(A.groups(s.state).found.length,0);assert.equal(A.groups(s.state).possible.length,3);
+  const e=A.hits(s.state,'m1')[0];s.resolveArchiveEntry(e.id,'m1',true);assert.equal(A.groups(s.state).found.length,1);
+  await s.checkArchive(a);assert.equal(A.hits(s.state,'m1')[0].manual,true);
+});
+
+test('отказ от неверного совпадения переживает повторную проверку и перезапуск',async t=>{
+  const {s,a,A}=archiveFixture(t);big(path.join(a,'Первый (2001).mkv'));await s.checkArchive(a);
+  const e=A.hits(s.state,'m1')[0];s.resolveArchiveEntry(e.id,'m1',false);assert.equal(A.groups(s.state).missing.length,3);
+  await s.checkArchive(a);assert.equal(A.hits(s.state,'m1').length,0);
+  assert.equal(A.hits(new Service({dir:s.dir}).state,'m1').length,0);
+  assert.throws(()=>s.resolveArchiveEntry(e.id,'m2',true),/устарело/);
+});
+
+test('изменившийся файл сбрасывает старое ручное подтверждение',async t=>{
+  const {s,a,A}=archiveFixture(t),p=path.join(a,'Первый.mkv');big(p);await s.checkArchive(a);
+  const e=A.hits(s.state,'m1')[0];s.resolveArchiveEntry(e.id,'m1',true);fs.truncateSync(p,MIN_FILM_BYTES+100);
+  await s.checkArchive(a);assert.equal(A.hits(s.state,'m1')[0].confirmedKey,null);
+});
+
+test('пустая точка подключения не стирает архив; отсутствие подтверждается отдельно',async t=>{
+  const {s,a,A}=archiveFixture(t),p=path.join(a,'Первый (2001).mkv');big(p);await s.checkArchive(a);fs.unlinkSync(p);
+  await s.checkArchive(a);assert.equal(s.state.archiveChecks[A.canonical(a)].status,'suspicious');assert.equal(A.groups(s.state).found.length,1);
+  s.confirmArchiveMissing(a);assert.equal(A.groups(s.state).found.length,0);assert.equal(A.groups(s.state).missing.length,3);
+});
+
+test('неполный обход сохраняет прежние находки из недоступной подпапки',async t=>{
+  const {s,a,A}=archiveFixture(t),dir=path.join(a,'nested');big(path.join(dir,'Первый (2001).mkv'));await s.checkArchive(a);
+  const readdir=fs.promises.readdir;t.mock.method(fs.promises,'readdir',async function(p,...args){if(p===dir)throw Error('access denied');return readdir.call(this,p,...args);});
+  await s.checkArchive(a);assert.equal(s.state.archiveChecks[A.canonical(a)].status,'partial');assert.equal(A.groups(s.state).found.length,1);
+});
+
+test('после ручного копирования и обычного сканирования фильм исчезает из Скачать',async t=>{
+  const {s,a,root,A}=archiveFixture(t);big(path.join(a,'Первый (2001).mkv'));await s.checkArchive(a);
+  const normal=path.join(root,'normal');big(path.join(normal,'Первый (2001).mkv'));s.addFolder(normal,'normal');await s.scanAll(normal);
+  assert.equal(A.pending(s.state).some(f=>f.key==='m1'),false);assert.equal(A.groups(s.state).found.length,0);
+  assert.equal(fs.existsSync(path.join(a,'Первый (2001).mkv')),true);
+});
+
+test('резервный NAS: DVD, Blu-ray, имя папки, исключения, ссылки и малые видео',async t=>{
+  const {s,a,root,A}=archiveFixture(t);
+  big(path.join(a,'Первый (2001)','VIDEO_TS','VTS_01_1.VOB'));big(path.join(a,'Второй (2002)','BDMV','STREAM','00001.m2ts'));
+  big(path.join(a,'Третий (2003)','video.mkv'));big(path.join(a,'#recycle','Первый (2001).mkv'));big(path.join(a,'excluded','Первый (2001).mkv'));
+  s.addFolder(path.join(a,'excluded'),'exclude');fs.writeFileSync(path.join(a,'Второй (2002).mkv'),'sample');
+  if(process.platform!=='win32')fs.symlinkSync(a,path.join(a,'recursive-link'),'dir');
+  await s.checkArchive(a);assert.equal(A.groups(s.state).found.length,3);assert.equal(Object.values(s.state.archiveEntries).length,3);
+  assert.equal(A.hits(s.state,'m1')[0].kind,'disc');assert.ok(A.hits(s.state,'m3')[0].path.endsWith('video.mkv'));
+});
+
+test('отмена и занятость не теряют каталог и не разрешают второй перенос',async t=>{
+  const {s,a,A}=archiveFixture(t);big(path.join(a,'Первый (2001).mkv'));await s.checkArchive(a);
+  s.transferBusy=true;await assert.rejects(s.checkArchive(a),/переноса/);s.transferBusy=false;
+  s.onScan=p=>{if(p.running)s.stopArchiveCheck();};await s.checkArchive(a);
+  assert.equal(s.state.archiveChecks[A.canonical(a)].status,'cancelled');assert.equal(A.groups(s.state).found.length,1);assert.equal(s.scanning,false);
+});
+
+test('смена роли и удаление резервной папки убирают её находки из Скачать',async t=>{
+  const {s,a,A}=archiveFixture(t);big(path.join(a,'Первый (2001).mkv'));await s.checkArchive(a);
+  s.setFolderRole(a,'normal');assert.equal(A.groups(s.state).found.length,0);
+  s.setFolderRole(a,'archive');assert.equal(A.groups(s.state).found.length,1);
+  s.removeFolder(a);assert.equal(A.groups(s.state).found.length,0);
+});
+
+test('Скачать показывает три блока, несколько путей, дату, экранирование и подтверждение',async t=>{
+  const {s,a,b}=archiveFixture(t);big(path.join(a,'Первый (2001).mkv'));big(path.join(b,'Первый (2001).avi'));big(path.join(a,'Второй.mkv'));await s.checkArchive();
+  s.state.films.m1.userTitle='<b>Личное имя</b>';
+  const renderer=orphanRenderer((method,...args)=>s[method](...args));renderer.run(`ui.state=${JSON.stringify(s.state)};ui.files=fileIndex();ui.screen='download'`);
+  const html=renderer.run('download()');assert.ok(html.includes('На резервном NAS: 1'));assert.ok(html.includes('Возможно найдено: 1'));assert.ok(html.includes('Не найдено: 1'));
+  assert.ok(html.includes('&lt;b&gt;Личное имя&lt;/b&gt;'));assert.ok(html.includes(a)&&html.includes(b));assert.ok(html.includes('Открыть папку'));assert.ok(html.includes('Найдено при последней проверке'));
+  // Invoke the actual registered action on the possible-match card.
+  const match=html.match(/data-a="([^"]+)"[^>]*>Это этот фильм — подтвердить/);assert.ok(match);
+  await renderer.run(`actions[${JSON.stringify(match[1])}]()`);
+  assert.equal(require('../src/archive').groups(s.state).found.length,2);
+});
+
+test('проверка резервного NAS не читает видео и не запускает probe или TMDB',async t=>{
+  const {s,a}=archiveFixture(t),p=path.join(a,'Первый (2001).mkv');big(p);
+  const open=fs.promises.open;t.mock.method(fs.promises,'open',async function(file,...args){if(String(file).endsWith('.mkv'))throw Error('video content must not be opened');return open.call(this,file,...args);});
+  t.mock.method(s,'probeAll',async()=>{throw Error('probe must not run');});
+  t.mock.method(s,'detail',async()=>{throw Error('TMDB must not run');});
+  await s.checkArchive(a);assert.equal(require('../src/archive').groups(s.state).found.length,1);
+});
+
+test('резервный NAS: опечатки и добавленные слова — только возможные совпадения',async t=>{
+  const {s,a,A}=archiveFixture(t);s.state.films={m1:film(1,'Дорога домой',2001),m2:film(2,'Долгая счастливая жизнь',2002),m3:film(3,'Совсем другой фильм',2003)};
+  big(path.join(a,'Дорога домои (2001).mkv'));big(path.join(a,'Долгая счастливая жизнь extended (2002).mkv'));big(path.join(a,'Непохожее название (2003).mkv'));
+  await s.checkArchive(a);assert.equal(A.groups(s.state).found.length,0);assert.equal(A.groups(s.state).possible.length,2);assert.equal(A.groups(s.state).missing.length,1);
+  assert.equal(A.hits(s.state,'m1')[0].confirmedKey,null);
+});
+
+test('резервный NAS: оригинальное название, альтернативное имя и технические пометки',async t=>{
+  const {s,a,A}=archiveFixture(t);s.state.films.m1.originalTitle='First Film';s.state.films.m2.altTitles=['Другое название'];
+  big(path.join(a,'First.Film.2001.1080p.BDRip.mkv'));big(path.join(a,'Другое название (2002).mkv'));
+  await s.checkArchive(a);assert.equal(A.groups(s.state).found.length,2);assert.equal(A.groups(s.state).possible.length,0);
+});
+
+test('пустые VIDEO_TS и BDMV не подтверждают наличие фильма',async t=>{
+  const {s,a,A}=archiveFixture(t);fs.mkdirSync(path.join(a,'Первый (2001)','VIDEO_TS'),{recursive:true});fs.mkdirSync(path.join(a,'Второй (2002)','BDMV','STREAM'),{recursive:true});
+  await s.checkArchive(a);assert.equal(A.groups(s.state).found.length,0);assert.equal(Object.values(s.state.archiveEntries).length,0);
+});
+
+test('фильм из нескольких частей находится по имени внешней папки',async t=>{
+  const {s,a,A}=archiveFixture(t);big(path.join(a,'Первый (2001)','Disc.CD1.mkv'));big(path.join(a,'Первый (2001)','Disc.CD2.mkv'));
+  await s.checkArchive(a);assert.equal(A.hits(s.state,'m1').length,2);assert.equal(A.groups(s.state).found.length,1);
+});
+
+test('контроль: вложенные резервные папки не дублируют записи и имеют отдельные результаты',async t=>{
+  const {s,a,A}=archiveFixture(t),nested=path.join(a,'nested');big(path.join(nested,'Первый (2001).mkv'));s.addFolder(nested,'archive');
+  await s.checkArchive();assert.equal(A.hits(s.state,'m1').length,1);assert.equal(A.hits(s.state,'m1')[0].root,nested);
+  assert.equal(s.state.archiveChecks[A.canonical(a)].status,'ok');assert.equal(s.state.archiveChecks[A.canonical(nested)].status,'ok');
+});
+
+test('контроль: подтверждение пропажи в старой папке не удаляет находку после смены владельца пути',async t=>{
+  const {s,a,A}=archiveFixture(t),nested=path.join(a,'nested');big(path.join(nested,'Первый (2001).mkv'));await s.checkArchive(a);
+  s.addFolder(nested,'archive');await s.checkArchive();assert.equal(s.state.archiveChecks[A.canonical(a)].status,'suspicious');
+  assert.equal(A.hits(s.state,'m1')[0].root,nested);s.confirmArchiveMissing(a);assert.equal(A.groups(s.state).found.length,1);
+});
+
+test('контроль: после ручного подтверждения неоднозначной копии она не предлагается другому одноимённому фильму',async t=>{
+  const {s,a,A}=archiveFixture(t);s.state.films.m2.userTitle='Первый';s.state.films.m2.year=2001;big(path.join(a,'Первый (2001).mkv'));
+  await s.checkArchive(a);assert.equal(A.hits(s.state,'m1').length,1);assert.equal(A.hits(s.state,'m2').length,1);
+  s.resolveArchiveEntry(A.hits(s.state,'m1')[0].id,'m1',true);assert.equal(A.hits(s.state,'m2').length,0);
+  const restored=new Service({dir:s.dir});assert.equal(A.groups(restored.state).found.length,1);assert.equal(A.groups(restored.state).missing.length,2);
+});
+
+test('контроль: исключённая VIDEO_TS не читается и не подтверждает наличие DVD',async t=>{
+  const {s,a,A}=archiveFixture(t),video=path.join(a,'Первый (2001)','VIDEO_TS');big(path.join(video,'VTS_01_1.VOB'));s.addFolder(video,'exclude');
+  const readdir=fs.promises.readdir;t.mock.method(fs.promises,'readdir',async function(p,...args){assert.notEqual(p,video);return readdir.call(this,p,...args);});
+  await s.checkArchive(a);assert.equal(A.groups(s.state).found.length,0);
 });

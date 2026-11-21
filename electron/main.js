@@ -46,7 +46,7 @@ function ffprobePath() {
 const makeTmdb = (key) => createTmdb({ key, fetchImpl: (url, opts) => net.fetch(url, opts) });
 
 // Методы, которые может вызывать интерфейс. Остальное в процесс не проникает.
-const SERVICE_METHODS = new Set(['resetNightDraft', 'saveNightDraft', 'generateNight', 'saveNightTemplate', 'removeNightTemplate', 'setNightTags', 'approveNight', 'removeNight', 'reviseNight', 'setNightTask', 'setNightResult', 'rateNight', 'setRenamePreference', 'getState', 'loadSeed', 'runImport', 'stopImport', 'progress', 'reviewList', 'resolveItem', 'skipItem', 'searchForReview', 'directorFilms', 'addFolder', 'removeFolder', 'setFolderRole', 'setAllConnected', 'scanAll', 'updateFolderPath', 'confirmLost', 'chooseEntryFilm', 'addEntryFilm', 'ignoreEntry', 'unignoreEntry', 'unlinkEntry', 'entryIsFilm', 'excludeSeriesFolder', 'keepOnDisk', 'duplicateOk', 'duplicates', 'renamePlan', 'applyRename', 'undoRename', 'candidateInfo', 'rescueReview', 'setFilmStatus', 'rate', 'toggleRewatch', 'finishReview', 'setTitle', 'setLibrarySort', 'saveDirectorNameDraft', 'discardDirectorNameDraft', 'rebaseDirectorNameDraft', 'applyDirectorNames', 'undoDirectorNames', 'suggestDirectorNames', 'setDirectorName', 'refreshDirectorNames', 'toggleFav', 'ban', 'setWish', 'addWish', 'addNear', 'removeNear', 'moveNear', 'filmography', 'markFilm', 'finishMarkup', 'chooseNext', 'searchAdd', 'addFilm', 'addDirector']);
+const SERVICE_METHODS = new Set(['checkArchive', 'resolveArchiveEntry', 'confirmArchiveMissing', 'stopArchiveCheck', 'resetNightDraft', 'saveNightDraft', 'generateNight', 'saveNightTemplate', 'removeNightTemplate', 'setNightTags', 'approveNight', 'removeNight', 'reviseNight', 'setNightTask', 'setNightResult', 'rateNight', 'setRenamePreference', 'getState', 'loadSeed', 'runImport', 'stopImport', 'progress', 'reviewList', 'resolveItem', 'skipItem', 'searchForReview', 'directorFilms', 'addFolder', 'removeFolder', 'setFolderRole', 'setAllConnected', 'scanAll', 'updateFolderPath', 'confirmLost', 'chooseEntryFilm', 'addEntryFilm', 'ignoreEntry', 'unignoreEntry', 'unlinkEntry', 'entryIsFilm', 'excludeSeriesFolder', 'keepOnDisk', 'duplicateOk', 'duplicates', 'renamePlan', 'applyRename', 'undoRename', 'candidateInfo', 'rescueReview', 'setFilmStatus', 'rate', 'toggleRewatch', 'finishReview', 'setTitle', 'setLibrarySort', 'saveDirectorNameDraft', 'discardDirectorNameDraft', 'rebaseDirectorNameDraft', 'applyDirectorNames', 'undoDirectorNames', 'suggestDirectorNames', 'setDirectorName', 'refreshDirectorNames', 'toggleFav', 'ban', 'setWish', 'addWish', 'addNear', 'removeNear', 'moveNear', 'filmography', 'markFilm', 'finishMarkup', 'chooseNext', 'searchAdd', 'addFilm', 'addDirector']);
 for (const method of ['previewNightTransfer', 'executeNightTransfer', 'getNightTransferProgress', 'cancelNightTransfer', 'recoverNightTransfer', 'dismissNightTransfer']) SERVICE_METHODS.add(method);
 
 const local = {
@@ -73,6 +73,13 @@ const local = {
     return r.canceled ? null : r.filePaths[0];
   },
   // Открывается только то, что нашёл сканер.
+  async openArchiveEntry(id) {
+    const e=service.state.archiveEntries?.[id];
+    if(!e||!require('../src/archive').roots(service.state).some(f=>require('../src/archive').canonical(f.path)===require('../src/archive').canonical(e.root)))throw Error('Запись архива недоступна.');
+    if(!fs.existsSync(e.path))throw Error('Подключи резервный NAS и проверь путь.');
+    if(e.kind==='file')shell.showItemInFolder(e.path);else {const error=await shell.openPath(e.path);if(error)throw Error(error);}
+    return true;
+  },
   async openEntry(id) {
     const e = service.getState().files && service.getState().files[id];
     if (!e) return false;
@@ -106,6 +113,7 @@ app.whenReady().then(() => {
   if (key) service.tmdb = makeTmdb(key);
 
   ipcMain.handle('api', async (_e, method, args) => {
+    if(service.archiveChecking&&!['getState','stopArchiveCheck','version','logPath','hasKey'].includes(method))throw Error('Дождись завершения проверки резервного NAS.');
     if (service.transferBusy && !['getState', 'hasKey', 'reviewList', 'progress', 'getNightTransferProgress', 'cancelNightTransfer', 'openEntry', 'version', 'logPath'].includes(method)) throw new Error('Дождись завершения переноса. Другие изменения временно недоступны.');
     if (local[method]) return local[method](...args);
     if (SERVICE_METHODS.has(method)) return service[method](...args);
