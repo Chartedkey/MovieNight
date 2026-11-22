@@ -1174,3 +1174,35 @@ test('Я скачал — проверить: изменение статуса 
   const r=orphanRenderer(async(method,...args)=>{if(method==='scanAll')s.state.films.m1.status='notfound';return s[method](...args);});r.run(`ui.state=${JSON.stringify(s.state)}`);
   await r.run('verifyDownloads()');assert.ok(r.run('ui.toast').includes('Новых связанных копий'));assert.ok(!r.run('ui.toast').includes('Найдены и связаны фильмы:'));
 });
+
+test('проверка с карточки: общая кнопка остаётся, выбранный фильм сразу исчезает после обнаружения копии',async t=>{
+  const {s,a,root}=archiveFixture(t);big(path.join(a,'Первый (2001).mkv'));await s.checkArchive(a);
+  const normal=path.join(root,'normal');big(path.join(normal,'Первый (2001).mkv'));s.addFolder(normal,'normal');
+  const r=orphanRenderer((method,...args)=>s[method](...args));r.run(`ui.state=${JSON.stringify(s.state)};ui.screen='download'`);
+  const html=r.run('download()');assert.equal([...html.matchAll(/>Я скачал — проверить<\/button>/g)].length,4);
+  const card=html.match(/<section class="card" data-film="m1">([\s\S]*?)<\/section>/)[1],button=card.match(/data-a="([^"]+)"[^>]*>Я скачал — проверить/);assert.ok(button);
+  await r.run(`actions[${JSON.stringify(button[1])}]()`);
+  assert.equal(r.run("downloadList().some(f=>f.key==='m1')"),false);assert.ok(r.run('ui.toast').includes('«Первый»: файл найден и связан'));assert.equal(r.run('ui.downloadCheckingKey'),null);
+});
+
+test('проверка с карточки не объявляет выбранный фильм найденным, если найден другой',async t=>{
+  const {s,root}=archiveFixture(t),normal=path.join(root,'normal');big(path.join(normal,'Второй (2002).mkv'));s.addFolder(normal,'normal');
+  const r=orphanRenderer((method,...args)=>s[method](...args));r.run(`ui.state=${JSON.stringify(s.state)}`);await r.run("verifyDownloads('m1')");
+  assert.ok(r.run('ui.toast').includes('«Первый»: связанная копия на обычных дисках пока не найдена'));assert.equal(r.run("downloadList().some(f=>f.key==='m1')"),true);assert.equal(r.run("downloadList().some(f=>f.key==='m2')"),false);
+});
+
+test('проверка с карточки находит копию в Сегодня и блокирует повторное/общее нажатие',async t=>{
+  const {s,root}=archiveFixture(t),today=path.join(root,'today');big(path.join(today,'Первый (2001).mkv'));s.addFolder(today,'today');
+  let release,scans=0;const gate=new Promise(resolve=>release=resolve),r=orphanRenderer(async(method,...args)=>{if(method==='scanAll'){scans++;await gate;}return s[method](...args);});r.run(`ui.state=${JSON.stringify(s.state)}`);
+  const first=r.run("verifyDownloads('m1')");await r.run("verifyDownloads('m2')");await r.run('verifyDownloads()');assert.equal(scans,1);assert.equal(r.run('ui.downloadCheckingKey'),'m1');
+  const html=r.run('download()'),card=html.match(/<section class="card" data-film="m1">([\s\S]*?)<\/section>/)[1];assert.ok(card.includes('disabled'));assert.ok(card.includes('Проверяю…'));
+  release();await first;assert.equal(r.run("downloadList().some(f=>f.key==='m1')"),false);assert.equal(r.run('ui.downloadCheckingKey'),null);
+});
+
+test('контроль: исправление фильма сохраняет игнорирование файла при снятии ошибочной связи',async t=>{
+  const s=correctionFixture(t),file=path.join(s.dir,'ignored.mkv');fs.writeFileSync(file,'unchanged');
+  s.state.files={x:{id:'x',path:file,filmKey:'m900',state:'linked',dvdPartHistory:[{filmKey:'m900',state:'ignored'}]}};s.ignoreEntry('x');
+  const p=await s.previewFilmCorrection('m900',901);s.applyFilmCorrection(p.token,{confirmed:true,keepTitle:true,keepFiles:false});
+  assert.equal(s.state.files.x.state,'ignored');assert.equal(s.state.files.x.filmKey,undefined);assert.equal(s.state.files.x.dvdPartHistory[0].state,'ignored');assert.equal(fs.readFileSync(file,'utf8'),'unchanged');
+  assert.equal(new Service({dir:s.dir}).state.files.x.state,'ignored');
+});

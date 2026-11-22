@@ -60,7 +60,7 @@ const correctionMethods={
       for(const template of next.nightTemplates||[])mapConfig(template.config,key,newKey);
       for(const night of next.nights||[]){mapSlots(night.slots,key,newKey);mapConfig(night.config,key,newKey);for(const revision of night.revisions||[]){mapSlots(revision.slots,key,newKey);mapConfig(revision.config,key,newKey);}}
       const updateEntry=e=>{
-        if(e.filmKey===key){if(options.keepFiles){e.filmKey=newKey;e.matchMethod='manual';}else{delete e.filmKey;delete e.matchMethod;e.state='orphan';e.forceReview=true;}}
+        if(e.filmKey===key){if(options.keepFiles){e.filmKey=newKey;e.matchMethod='manual';}else{delete e.filmKey;delete e.matchMethod;e.state=e.state==='ignored'?'ignored':'orphan';e.forceReview=true;}}
         if(e.candidates)e.candidates=[...new Set(e.candidates.map(k=>k===key?newKey:k))];
         for(const part of e.dvdPartHistory||[])updateEntry(part);
       };
