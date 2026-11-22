@@ -667,7 +667,7 @@ function renderInner() {
     const screens = { library, near, wishlist, rewatch, morning, review, download, disks, night, 'night-prep': nightPrep };
     html = navHtml() + `<main class="main">${(screens[ui.screen] || library)()}</main>`;
   }
-  const mdl = ui.modal && ui.modal.type.startsWith('night-') ? nightModal() : ui.modal && ui.modal.type === 'rename' ? renameModal() : modal();
+  const mdl = ui.modal?.type==='film-correction'?filmCorrectionModal():ui.modal && ui.modal.type.startsWith('night-') ? nightModal() : ui.modal && ui.modal.type === 'rename' ? renameModal() : modal();
   $app.innerHTML = `<div class="app">${html}${mdl}${menu()}${ui.toast ? `<div class="toast" role="status">${esc(ui.toast)}${ui.toastAction ? `<button class="mini" data-a="${on(ui.toastAction.run)}">${esc(ui.toastAction.label)}</button>` : ''}</div>` : ''}</div>`;
   const shadeAfter = document.querySelector('.shade');
   if (shadeAfter && shadeBefore) shadeAfter.scrollTop = shadeTop;

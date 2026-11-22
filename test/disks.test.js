@@ -395,6 +395,7 @@ function orphanRenderer(invoke) {
     } },
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/archive.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../renderer/film-correction-ui.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../renderer/archive-ui.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/planner.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../renderer/night-ui.js'), 'utf8'), context);
@@ -1031,4 +1032,145 @@ test('контроль: исключённая VIDEO_TS не читается и
   const {s,a,A}=archiveFixture(t),video=path.join(a,'Первый (2001)','VIDEO_TS');big(path.join(video,'VTS_01_1.VOB'));s.addFolder(video,'exclude');
   const readdir=fs.promises.readdir;t.mock.method(fs.promises,'readdir',async function(p,...args){assert.notEqual(p,video);return readdir.call(this,p,...args);});
   await s.checkArchive(a);assert.equal(A.groups(s.state).found.length,0);
+});
+
+function correctionFixture(t){
+  const s=svc({m900:film(900,'Имитатор',1995,{originalTitle:'Leaving Las Vegas',tmdbTitle:'Покидая Лас-Вегас',poster:'/wrong.jpg',dir:9,directorIds:[9],rating:8,queueChosen:true,wish:true,nightTags:{weight:'heavy'},watched:[{date:'2020-01-01',result:'watched'}]})});
+  s.state.directors={9:{id:9,name:'Mike Figgis',fav:true}};
+  s.tmdb=fakeTmdb([{id:900,title:'Покидая Лас-Вегас',original_title:'Leaving Las Vegas',year:1995,directors:[[9,'Mike Figgis']]},{id:901,title:'Имитатор',original_title:'Copycat',year:1995,directors:[[2,'Jon Amiel']]}]);
+  s.state.near=[{key:'near1',ids:['m900']}];s.state.nameLinks={'покидая лас вегас|1995':'m900'};
+  s.state.archiveEntries={a:{id:'a',root:'/archive',path:'/archive/Покидая Лас-Вегас.mkv',candidates:['m900'],confirmedKey:'m900',manual:true,rejected:[]}};
+  s.state.folders=[{path:'/archive',role:'archive'}];
+  s.save();t.after(()=>fs.rmSync(s.dir,{recursive:true,force:true}));return s;
+}
+
+test('исправление фильма: поиск по названию и ссылке показывает правильного режиссёра без записи в базу',async t=>{
+  const s=correctionFixture(t),before=structuredClone(s.state);
+  const results=await s.searchFilmCorrection('m900','Имитатор (1995)');assert.equal(results[0].id,901);assert.equal(results[0].originalTitle,'Copycat');assert.equal(results[0].directors[0].name,'Jon Amiel');
+  const direct=await s.searchFilmCorrection('m900','https://www.themoviedb.org/movie/901-copycat');assert.equal(direct[0].id,901);
+  assert.deepEqual(s.state,before);
+});
+
+test('предпросмотр исправления не меняет состояние и включает обычные и архивные связи',async t=>{
+  const s=correctionFixture(t);s.state.files={x:{id:'x',path:'/films/film.mkv',filmKey:'m900',state:'linked'}};s.save();
+  const before=structuredClone(s.state),disk=fs.readFileSync(s.file,'utf8'),p=await s.previewFilmCorrection('m900',901);
+  assert.equal(p.target.directors[0].id,2);assert.equal(p.files.length,1);assert.equal(p.archive.length,1);
+  assert.deepEqual(s.state,before);assert.equal(fs.readFileSync(s.file,'utf8'),disk);
+});
+
+test('Имитатор/Copycat: заменяются TMDB, постер и режиссёр; личные данные сохраняются после перезапуска',async t=>{
+  const s=correctionFixture(t),before=structuredClone(s.state),p=await s.previewFilmCorrection('m900',901);
+  const r=s.applyFilmCorrection(p.token,{confirmed:true,keepTitle:true,keepFiles:false}),f=r.state.films.m901;
+  assert.equal(r.filmKey,'m901');assert.equal(s.state.films.m900,undefined);assert.equal(f.originalTitle,'Copycat');assert.equal(f.tmdbTitle,'Имитатор');assert.equal(f.dir,2);assert.notEqual(f.poster,'/wrong.jpg');
+  for(const field of ['rating','status','watched','queueChosen','wish','nightTags'])assert.deepEqual(f[field],before.films.m900[field],field);
+  assert.equal(f.userTitle,'Имитатор');assert.deepEqual(s.state.directors[9],before.directors[9]);assert.equal(s.state.directors[2].name,'Jon Amiel');
+  assert.deepEqual(new Service({dir:s.dir}).state,s.state);assert.equal(s.state.filmCorrections[0].before.originalTitle,'Leaving Las Vegas');
+});
+
+test('исправление не переносит архивный файл другого фильма на новую запись',async t=>{
+  const s=correctionFixture(t),p=await s.previewFilmCorrection('m900',901);s.applyFilmCorrection(p.token,{confirmed:true,keepTitle:true,keepFiles:false});
+  assert.equal(s.state.archiveEntries.a.path,'/archive/Покидая Лас-Вегас.mkv');assert.equal(s.state.archiveEntries.a.confirmedKey,null);assert.deepEqual(s.state.archiveEntries.a.candidates,[]);
+  const A=require('../src/archive');assert.equal(A.hits(s.state,'m901').length,0);assert.equal(A.groups(s.state).missing[0].key,'m901');assert.deepEqual(s.state.nameLinks,{});
+});
+
+test('обычные файлы остаются на месте, связи возвращаются в разбор либо сохраняются по явному выбору',async t=>{
+  for(const keepFiles of [false,true]){
+    const s=correctionFixture(t),file=path.join(s.dir,'film.mkv');fs.writeFileSync(file,'movie bytes');
+    s.state.files={x:{id:'x',path:file,filmKey:'m900',state:'linked',matchMethod:'name-year',dvdPartHistory:[{filmKey:'m900',state:'linked'}]}};s.save();
+    const p=await s.previewFilmCorrection('m900',901);s.applyFilmCorrection(p.token,{confirmed:true,keepTitle:true,keepFiles});
+    assert.equal(fs.readFileSync(file,'utf8'),'movie bytes');const e=s.state.files.x;
+    assert.equal(e.filmKey,keepFiles?'m901':undefined);assert.equal(e.state,keepFiles?'linked':'orphan');assert.equal(e.dvdPartHistory[0].filmKey,keepFiles?'m901':undefined);
+    if(!keepFiles)assert.equal(e.forceReview,true);
+  }
+});
+
+test('исправление обновляет ближайшие, черновик, отказы, планы/ревизии и обратные снимки без потери истории',async t=>{
+  const s=correctionFixture(t),c={slots:[{film:'m900',locked:true}],rejectedFilms:['m900']};
+  s.state.nightDraft=structuredClone(c);s.state.nights=[{id:'night',date:'2026-11-01',slots:[{key:'m900',title:'Имитатор',result:'watched',before:{near:[{index:0,entry:{key:'near1',ids:['m900']}}]}}],config:structuredClone(c),revisions:[{config:structuredClone(c),slots:[{key:'m900',title:'Прежний снимок'}]}]}];
+  const p=await s.previewFilmCorrection('m900',901);s.applyFilmCorrection(p.token,{confirmed:true,keepTitle:false,keepFiles:false});
+  assert.deepEqual(s.state.near[0].ids,['m901']);assert.equal(s.state.nightDraft.slots[0].film,'m901');assert.deepEqual(s.state.nightDraft.rejectedFilms,['m901']);
+  const n=s.state.nights[0];assert.equal(n.slots[0].key,'m901');assert.equal(n.slots[0].result,'watched');assert.equal(n.date,'2026-11-01');assert.equal(n.revisions[0].slots[0].key,'m901');assert.equal(n.revisions[0].slots[0].title,'Прежний снимок');assert.deepEqual(n.slots[0].before.near[0].entry.ids,['m901']);
+  assert.equal(s.state.films.m901.userTitle,null);
+});
+
+test('исправление обновляет разрешённые ссылки импорта, чтобы старая запись не возвращалась',async t=>{
+  const s=correctionFixture(t);s.state.job={phase:'done',items:[{tmdbId:900,applied:true,dirIds:[9],groupDir:9}],nearItems:[],nearEntries:[{refs:[{tmdbId:900}]}]};
+  const p=await s.previewFilmCorrection('m900',901);s.applyFilmCorrection(p.token,{confirmed:true,keepTitle:true,keepFiles:false});
+  assert.equal(s.state.job.items[0].tmdbId,901);assert.deepEqual(s.state.job.items[0].dirIds,[2]);assert.equal(s.state.job.items[0].groupDir,2);assert.equal(s.state.job.nearEntries[0].refs[0].tmdbId,901);
+});
+
+test('отмена, неподтверждённая, просроченная, повторная и устаревшая замены не меняют базу',async t=>{
+  const s=correctionFixture(t),p=await s.previewFilmCorrection('m900',901),before=structuredClone(s.state);
+  assert.throws(()=>s.applyFilmCorrection(p.token,{keepTitle:true,keepFiles:false}),/Подтверди/);assert.deepEqual(s.state,before);
+  s.filmCorrectionPlans.get(p.token).expires=0;assert.throws(()=>s.applyFilmCorrection(p.token,{confirmed:true,keepTitle:true,keepFiles:false}),/устарел/);
+  const p2=await s.previewFilmCorrection('m900',901);s.setTitle('m900','Другое имя');const changed=structuredClone(s.state);assert.throws(()=>s.applyFilmCorrection(p2.token,{confirmed:true,keepTitle:true,keepFiles:false}),/изменилась/);assert.deepEqual(s.state,changed);
+  const p3=await s.previewFilmCorrection('m900',901);s.applyFilmCorrection(p3.token,{confirmed:true,keepTitle:true,keepFiles:false});const done=structuredClone(s.state);assert.throws(()=>s.applyFilmCorrection(p3.token,{confirmed:true,keepTitle:true,keepFiles:false}),/устарел/);assert.deepEqual(s.state,done);
+});
+
+test('сбой сохранения исправления восстанавливает всю базу в памяти и на диске',async t=>{
+  const s=correctionFixture(t),p=await s.previewFilmCorrection('m900',901),before=structuredClone(s.state);
+  t.mock.method(s,'save',()=>{throw Error('disk full');});assert.throws(()=>s.applyFilmCorrection(p.token,{confirmed:true,keepTitle:true,keepFiles:false}),/disk full/);
+  assert.deepEqual(s.state,before);assert.deepEqual(new Service({dir:s.dir}).state,before);
+});
+
+test('существующая целевая запись и незавершённые переносы блокируют небезопасную замену',async t=>{
+  const s=correctionFixture(t);s.state.films.m901=film(901,'Имитатор',1995,{rating:3});const before=structuredClone(s.state);
+  await assert.rejects(s.previewFilmCorrection('m900',901),/уже есть/);assert.deepEqual(s.state,before);
+  delete s.state.films.m901;s.state.nightTransfers=[{id:'recovery',status:'needs-recovery'}];await assert.rejects(s.previewFilmCorrection('m900',901),/незавершённые/);
+});
+
+test('renderer: из Скачать открывается исправление, отмена не меняет фильм, подтверждение применяет предпросмотр',async t=>{
+  const s=correctionFixture(t),renderer=orphanRenderer((method,...args)=>s[method](...args));renderer.run(`ui.state=${JSON.stringify(s.state)};ui.screen='download'`);
+  const html=renderer.run('download()'),button=html.match(/data-a="([^"]+)"[^>]*>Исправить фильм/);assert.ok(button);await renderer.run(`actions[${JSON.stringify(button[1])}]()`);
+  assert.equal(renderer.run('ui.modal.type'),'film-correction');assert.ok(renderer.run('filmCorrectionModal()').includes('Mike Figgis'));
+  const cancel=renderer.run('filmCorrectionModal()').match(/data-a="([^"]+)"[^>]*>Отмена/);await renderer.run(`actions[${JSON.stringify(cancel[1])}]()`);assert.equal(s.state.films.m900.originalTitle,'Leaving Las Vegas');
+  renderer.run("openFilmCorrection('m900')");await renderer.run('correctionPreview(901)');assert.ok(renderer.run('filmCorrectionModal()').includes('Copycat'));
+  // loadDiskExtras uses real service methods through the renderer bridge.
+  await renderer.run('correctionApply()');assert.equal(renderer.run('ui.modal'),null);assert.equal(s.state.films.m901.originalTitle,'Copycat');
+});
+
+test('Я скачал — проверить: сразу находит обычную копию, обновляет Скачать и не обходит резервный NAS',async t=>{
+  const {s,a,root,A}=archiveFixture(t);big(path.join(a,'Первый (2001).mkv'));await s.checkArchive(a);
+  const normal=path.join(root,'normal');big(path.join(normal,'Первый (2001).mkv'));s.addFolder(normal,'normal');
+  s.state.films.m1.rating=9;const before=structuredClone(s.state),readdir=fs.promises.readdir;
+  t.mock.method(fs.promises,'readdir',async function(p,...args){assert.ok(!A.within(p,a),'archive must not be accessed');return readdir.call(this,p,...args);});
+  const renderer=orphanRenderer((method,...args)=>s[method](...args));renderer.run(`ui.state=${JSON.stringify(s.state)};ui.screen='download'`);
+  const button=renderer.run('download()').match(/data-a="([^"]+)"[^>]*>Я скачал — проверить/);assert.ok(button);
+  await renderer.run(`actions[${JSON.stringify(button[1])}]()`);
+  assert.equal(renderer.run("downloadList().some(f=>f.key==='m1')"),false);assert.ok(renderer.run('ui.toast').includes('Найдены и связаны фильмы: 1'));
+  assert.equal(renderer.run('ui.downloadChecking'),false);assert.equal(renderer.run('ui.scan'),null);
+  assert.deepEqual(s.state.archiveEntries,before.archiveEntries);assert.equal(s.state.films.m1.rating,9);assert.equal(s.state.films.m1.status,'queue');assert.deepEqual(s.state.near,before.near);
+});
+
+test('Я скачал — проверить: неоднозначный файл остаётся на разбор, фильм не исчезает из Скачать',async t=>{
+  const {s,root}=archiveFixture(t);s.state.films.m2.userTitle='Первый';s.state.films.m2.originalTitle='Первый';s.state.films.m2.year=2001;
+  const normal=path.join(root,'normal');big(path.join(normal,'Первый (2001).mkv'));s.addFolder(normal,'normal');
+  const r=orphanRenderer((method,...args)=>s[method](...args));r.run(`ui.state=${JSON.stringify(s.state)};ui.screen='download'`);await r.run('verifyDownloads()');
+  assert.equal(r.run('downloadList().length'),3);assert.ok(r.run('ui.toast').includes('Нужно разобрать'));assert.ok(!r.run('ui.toast').includes('Найдены и связаны фильмы:'));
+});
+
+test('Я скачал — проверить: недоступная обычная папка даёт неполную проверку',async t=>{
+  const {s,root}=archiveFixture(t);s.addFolder(path.join(root,'offline'),'normal');
+  const r=orphanRenderer((method,...args)=>s[method](...args));r.run(`ui.state=${JSON.stringify(s.state)}`);await r.run('verifyDownloads()');
+  assert.ok(r.run('ui.toast').includes('Проверка неполная'));assert.ok(!r.run('ui.toast').startsWith('Проверено.'));assert.equal(r.run('ui.downloadChecking'),false);
+});
+
+test('Я скачал — проверить: при отсутствии обычных папок NAS не включается и предлагается добавить папку',async t=>{
+  const {s}=archiveFixture(t);let calls=0;const r=orphanRenderer(()=>{calls++;throw Error('No scan should run');});r.run(`ui.state=${JSON.stringify(s.state)}`);
+  await r.run('verifyDownloads()');assert.equal(calls,0);assert.ok(r.run('ui.toast').includes('Добавь обычную папку'));
+});
+
+test('Я скачал — проверить: повторное нажатие и работающий архивный обход не запускают второй scanAll',async t=>{
+  const {s,root}=archiveFixture(t);const normal=path.join(root,'normal');fs.mkdirSync(normal);s.addFolder(normal,'normal');let scans=0,release;
+  const gate=new Promise(resolve=>release=resolve);
+  const r=orphanRenderer(async(method,...args)=>{if(method==='scanAll'){scans++;await gate;}return s[method](...args);});r.run(`ui.state=${JSON.stringify(s.state)}`);
+  const first=r.run('verifyDownloads()');await r.run('verifyDownloads()');assert.equal(scans,1);assert.ok(r.run('download()').includes('Проверяю…'));
+  release();await first;assert.equal(r.run('ui.downloadChecking'),false);
+  r.run('ui.scan={archive:true,running:true}');await r.run('verifyDownloads()');assert.equal(scans,1);
+});
+
+test('Я скачал — проверить: изменение статуса во время проверки не считается найденным файлом',async t=>{
+  const {s,root}=archiveFixture(t),normal=path.join(root,'normal');fs.mkdirSync(normal);s.addFolder(normal,'normal');
+  const r=orphanRenderer(async(method,...args)=>{if(method==='scanAll')s.state.films.m1.status='notfound';return s[method](...args);});r.run(`ui.state=${JSON.stringify(s.state)}`);
+  await r.run('verifyDownloads()');assert.ok(r.run('ui.toast').includes('Новых связанных копий'));assert.ok(!r.run('ui.toast').includes('Найдены и связаны фильмы:'));
 });
