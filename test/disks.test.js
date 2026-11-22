@@ -1206,3 +1206,46 @@ test('контроль: исправление фильма сохраняет �
   assert.equal(s.state.files.x.state,'ignored');assert.equal(s.state.files.x.filmKey,undefined);assert.equal(s.state.files.x.dvdPartHistory[0].state,'ignored');assert.equal(fs.readFileSync(file,'utf8'),'unchanged');
   assert.equal(new Service({dir:s.dir}).state.files.x.state,'ignored');
 });
+
+test('Скачать: В ближайшие работает без TMDB и не подтверждает архивный файл',async t=>{
+  const {s,a}=archiveFixture(t);big(path.join(a,'Первый.mkv'));await s.checkArchive(a);const archive=structuredClone(s.state.archiveEntries);s.state.films.m1.rating=8;
+  s.tmdb={get(){throw Error('No TMDB');},details(){throw Error('No TMDB');}};
+  const r=orphanRenderer((method,...args)=>s[method](...args));r.run(`ui.state=${JSON.stringify(s.state)}`);
+  const html=r.run('download()'),card=html.match(/<section class="card" data-film="m1">([\s\S]*?)<\/section>/)[1],button=card.match(/data-a="([^"]+)"[^>]*>В ближайшие/);assert.ok(button);
+  await r.run(`actions[${JSON.stringify(button[1])}]()`);await r.run("downloadFilmAction('m1','near')");
+  assert.equal(s.state.near.filter(e=>e.ids.includes('m1')).length,1);assert.equal(s.state.films.m1.rating,8);assert.deepEqual(s.state.films.m1.watched,[]);assert.deepEqual(s.state.archiveEntries,archive);
+  assert.equal(r.run("downloadList().some(f=>f.key==='m1')"),true);assert.ok(r.run('download()').includes('Уже в ближайших'));
+});
+
+test('Скачать: В ближайшие из запаса требует выбора при трёх фильмах в очереди',async t=>{
+  const {s}=archiveFixture(t);s.state.films.m4=film(4,'Четвёртый',2004,{status:'reserve',rating:9});const before=structuredClone(s.state);
+  const r=orphanRenderer((method,...args)=>s[method](...args));r.run(`ui.state=${JSON.stringify(s.state)}`);await r.run("downloadFilmAction('m4','near')");
+  assert.equal(r.run('ui.modal.type'),'queue');assert.equal(r.run('ui.modal.near'),true);assert.deepEqual(s.state,before);
+  const html=r.run('modal()'),button=html.match(/data-a="([^"]+)"[^>]*>Добавить ещё одним/);assert.ok(button);await r.run(`actions[${JSON.stringify(button[1])}]()`);
+  assert.equal(s.state.films.m4.status,'queue');assert.equal(s.state.films.m4.rating,9);assert.equal(s.state.near.filter(e=>e.ids.includes('m4')).length,1);
+});
+
+test('Скачать: Уже смотрел убирает карточку и ближайший просмотр, сохраняя оценку и файлы',async t=>{
+  const {s,a}=archiveFixture(t);const file=path.join(a,'Первый.mkv');big(file);await s.checkArchive(a);s.state.films.m1.rating=8;s.addNear('m1');
+  const archive=structuredClone(s.state.archiveEntries),size=fs.statSync(file).size;
+  const r=orphanRenderer((method,...args)=>s[method](...args));r.run(`ui.state=${JSON.stringify(s.state)}`);
+  const card=r.run('download()').match(/<section class="card" data-film="m1">([\s\S]*?)<\/section>/)[1],button=card.match(/data-a="([^"]+)"[^>]*>Уже смотрел/);assert.ok(button);await r.run(`actions[${JSON.stringify(button[1])}]()`);
+  assert.equal(s.state.films.m1.status,'watched');assert.equal(s.state.films.m1.rating,8);assert.equal(s.state.films.m1.pending,true);assert.equal(s.state.films.m1.watched.length,1);assert.equal(s.state.films.m1.watched[0].date,new Date().toISOString().slice(0,10));
+  assert.equal(s.state.near.some(e=>e.ids.includes('m1')),false);assert.equal(r.run("downloadList().some(f=>f.key==='m1')"),false);assert.deepEqual(s.state.archiveEntries,archive);assert.equal(fs.statSync(file).size,size);
+  assert.equal(new Service({dir:s.dir}).state.films.m1.rating,8);
+});
+
+test('Скачать: повторные нажатия Уже смотрел не дублируют историю',async t=>{
+  const {s}=archiveFixture(t);let release,calls=0;const gate=new Promise(resolve=>release=resolve);
+  const r=orphanRenderer(async(method,...args)=>{if(method==='setFilmStatus'){calls++;await gate;}return s[method](...args);});r.run(`ui.state=${JSON.stringify(s.state)}`);
+  const first=r.run("downloadFilmAction('m1','watched')");await r.run("downloadFilmAction('m1','watched')");assert.equal(calls,1);release();await first;
+  await r.run("downloadFilmAction('m1','watched')");assert.equal(calls,1);assert.equal(s.state.films.m1.watched.length,1);assert.equal(r.run('ui.downloadActionBusy'),false);
+});
+
+test('Скачать: обе команды доступны во всех блоках и заблокированы при сканировании',async t=>{
+  const {s,a}=archiveFixture(t);big(path.join(a,'Первый (2001).mkv'));big(path.join(a,'Второй.mkv'));await s.checkArchive(a);
+  let calls=0;const r=orphanRenderer((method,...args)=>{calls++;return s[method](...args);});r.run(`ui.state=${JSON.stringify(s.state)}`);
+  const html=r.run('download()');assert.equal([...html.matchAll(/>В ближайшие<\/button>/g)].length,3);assert.equal([...html.matchAll(/>Уже смотрел<\/button>/g)].length,3);
+  r.run('ui.scan={archive:true,running:true}');const card=r.run('download()').match(/<section class="card" data-film="m1">([\s\S]*?)<\/section>/)[1];assert.match(card,/<button[^>]*disabled[^>]*>В ближайшие/);assert.match(card,/<button[^>]*disabled[^>]*>Уже смотрел/);
+  await r.run("downloadFilmAction('m1','near')");await r.run("downloadFilmAction('m1','watched')");assert.equal(calls,0);
+});
