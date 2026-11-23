@@ -16,7 +16,7 @@ const nightMethods={
   reviseNight(nid,config){const n=getNight(this,nid);if(n.slots.some(s=>s.result))throw Error('Ночь уже разбиралась. Создай новый план, чтобы сохранить историю.');const checked=P.check(this.state,config);if(checked.errors.length)throw Error(checked.errors.join(' '));
     n.revisions=n.revisions||[];n.revisions.push({at:new Date().toISOString(),config:n.config,slots:n.slots,total:n.total});
     const old=n.slots;n.slots=checked.rows.map((r,i)=>({key:r.key,title:P.title(this.mustFilm(r.key)),year:this.mustFilm(r.key).year,runtime:r.runtime,reasons:r.reasons,index:i,result:null,rating:null}));
-    n.tasks=Object.fromEntries(Object.entries(n.tasks).filter(([key])=>{const i=Number(key.split(':')[0]);return old[i]?.key===n.slots[i]?.key;}));n.config=clone(config);n.total=checked.total;n.unknownRuntime=checked.unknownRuntime;this.state.nightDraft=clone(config);delete this.state.nightDraft.editingNightId;this.save();return {state:this.state,nightId:nid};},
+    n.tasks=Object.fromEntries(Object.entries(n.tasks).filter(([key])=>{const i=Number(key.split(':')[0]);return old[i]?.key===n.slots[i]?.key;}));n.config=clone(config);n.mergeReviewRequired=false;n.total=checked.total;n.unknownRuntime=checked.unknownRuntime;this.state.nightDraft=clone(config);delete this.state.nightDraft.editingNightId;this.save();return {state:this.state,nightId:nid};},
   removeNight(nid,confirmed=false){
     getNight(this,nid);
     if(confirmed!==true)throw Error('Подтверди удаление сохранённой ночи.');
@@ -32,6 +32,8 @@ const nightMethods={
   },
   setNightTask(nid,key,done){const n=getNight(this,nid);if(typeof key!=='string'||key.length>250||typeof done!=='boolean')throw Error('Некорректная задача.');n.tasks[key]=done;this.save();return this.state;},
   setNightResult(nid,index,result){if(![null,'watched','dropped','skipped'].includes(result))throw Error('Некорректный результат.');const {n,slot}=getSlot(this,nid,index);if(slot.result===result)return this.state;
+    if(slot.mergePlanConflict)throw Error('В плане были обе объединённые записи. Пересобери план перед отметкой просмотра.');
+    if(slot.mergedFilm)throw Error('Этот исторический результат сохранён при объединении фильмов. Его отмена недоступна; новый просмотр отмечай отдельно.');
     if((this.state.nights||[]).some(other=>this.state.nights.indexOf(other)>this.state.nights.indexOf(n)&&other.slots.some(x=>x.key===slot.key&&['watched','dropped'].includes(x.result))))throw Error('У фильма есть более поздний просмотр. Разбери его перед изменением старой отметки.');
     const f=this.mustFilm(slot.key);
     // Deleted plans leave their viewings in the film history. They still protect later results.
@@ -50,6 +52,6 @@ const nightMethods={
     }
     if(changesFilm){this.afterQueueChange(f.dir);this.refreshTasks();}this.save();return this.state;
   },
-  rateNight(nid,index,rating){const {slot}=getSlot(this,nid,index);if(!['watched','dropped'].includes(slot.result))throw Error('Сначала отметь просмотр или «Бросил».');if(rating!==null&&(!Number.isInteger(rating)||rating<1||rating>10))throw Error('Оценка от 1 до 10.');slot.rating=rating;slot.ratingEdited=true;this.mustFilm(slot.key).rating=rating;this.save();return this.state;},
+  rateNight(nid,index,rating){const {slot}=getSlot(this,nid,index);if(slot.mergedFilm)throw Error('Оценку объединённого фильма меняй отдельно; изменение старого результата ночи недоступно.');if(!['watched','dropped'].includes(slot.result))throw Error('Сначала отметь просмотр или «Бросил».');if(rating!==null&&(!Number.isInteger(rating)||rating<1||rating>10))throw Error('Оценка от 1 до 10.');slot.rating=rating;slot.ratingEdited=true;this.mustFilm(slot.key).rating=rating;this.save();return this.state;},
 };
 module.exports={nightMethods};

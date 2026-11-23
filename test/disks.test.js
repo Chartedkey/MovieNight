@@ -1113,9 +1113,9 @@ test('сбой сохранения исправления восстанавл�
   assert.deepEqual(s.state,before);assert.deepEqual(new Service({dir:s.dir}).state,before);
 });
 
-test('существующая целевая запись и незавершённые переносы блокируют небезопасную замену',async t=>{
+test('существующая целевая запись требует подтверждения объединения; незавершённые переносы блокируют замену',async t=>{
   const s=correctionFixture(t);s.state.films.m901=film(901,'Имитатор',1995,{rating:3});const before=structuredClone(s.state);
-  await assert.rejects(s.previewFilmCorrection('m900',901),/уже есть/);assert.deepEqual(s.state,before);
+  const p=await s.previewFilmCorrection('m900',901);assert.equal(p.existing.key,'m901');assert.throws(()=>s.applyFilmCorrection(p.token,{confirmed:true,keepTitle:true,keepFiles:false}),/Подтверди объединение/);assert.deepEqual(s.state,before);
   delete s.state.films.m901;s.state.nightTransfers=[{id:'recovery',status:'needs-recovery'}];await assert.rejects(s.previewFilmCorrection('m900',901),/незавершённые/);
 });
 
@@ -1248,4 +1248,154 @@ test('Скачать: обе команды доступны во всех бл�
   const html=r.run('download()');assert.equal([...html.matchAll(/>В ближайшие<\/button>/g)].length,3);assert.equal([...html.matchAll(/>Уже смотрел<\/button>/g)].length,3);
   r.run('ui.scan={archive:true,running:true}');const card=r.run('download()').match(/<section class="card" data-film="m1">([\s\S]*?)<\/section>/)[1];assert.match(card,/<button[^>]*disabled[^>]*>В ближайшие/);assert.match(card,/<button[^>]*disabled[^>]*>Уже смотрел/);
   await r.run("downloadFilmAction('m1','near')");await r.run("downloadFilmAction('m1','watched')");assert.equal(calls,0);
+});
+
+function mergeFixture(t){
+  const s=correctionFixture(t);s.state.films.m901=film(901,'Правильное личное имя',1995,{originalTitle:'Copycat',dir:2,directorIds:[2],status:'watched',rating:9,watched:[{date:'2021-01-01',result:'watched'}],nightTags:{attention:'easy'},pending:true});s.state.directors[2]={id:2,name:'Jon Amiel',fav:true};s.save();return s;
+}
+function mergeOptions(p,overrides={}){return {confirmed:true,keepTitle:true,keepFiles:false,mergeConfirmed:true,mergeChoices:Object.fromEntries(p.conflicts.map(c=>[c.field,'target'])),...overrides};}
+
+test('объединение: предпросмотр обеих карточек и конфликты ничего не меняют, каждый выбор обязателен',async t=>{
+  const s=mergeFixture(t),before=structuredClone(s.state),disk=fs.readFileSync(s.file,'utf8'),p=await s.previewFilmCorrection('m900',901);
+  assert.equal(p.existing.rating,9);for(const field of ['rating','status','userTitle','near'])assert.ok(p.conflicts.some(c=>c.field===field),field);
+  assert.deepEqual(s.state,before);assert.equal(fs.readFileSync(s.file,'utf8'),disk);
+  for(const conflict of p.conflicts){const options=mergeOptions(p);delete options.mergeChoices[conflict.field];assert.throws(()=>s.applyFilmCorrection(p.token,options),/Выбери/);assert.deepEqual(s.state,before);}
+  assert.throws(()=>s.applyFilmCorrection(p.token,mergeOptions(p,{mergeConfirmed:false})),/Подтверди объединение/);assert.deepEqual(s.state,before);
+});
+
+test('объединение: сохраняется одна правильная карточка с выбранными значениями и обеими историями',async t=>{
+  const s=mergeFixture(t),p=await s.previewFilmCorrection('m900',901),options=mergeOptions(p);
+  Object.assign(options.mergeChoices,{status:'source',rating:'source',userTitle:'target',near:'source','nightTags.weight':'source','nightTags.attention':'target'});
+  const result=s.applyFilmCorrection(p.token,options),f=result.state.films.m901;
+  assert.equal(result.merged,true);assert.equal(s.state.films.m900,undefined);assert.equal(f.originalTitle,'Copycat');assert.equal(f.dir,2);assert.equal(f.status,'queue');assert.equal(f.rating,8);assert.equal(f.userTitle,'Правильное личное имя');assert.equal(f.nightTags.weight,'heavy');assert.equal(f.nightTags.attention,'easy');
+  assert.deepEqual(f.watched.map(w=>w.date),['2020-01-01','2021-01-01']);assert.deepEqual(s.state.near[0].ids,['m901']);assert.equal(s.state.filmCorrections[0].existing.rating,9);
+  assert.deepEqual(new Service({dir:s.dir}).state,s.state);
+});
+
+test('объединение: правильная обычная копия сохраняется, ошибка не перепривязывается и фильм уходит из Скачать',async t=>{
+  const s=mergeFixture(t),wrong=path.join(s.dir,'wrong.mkv'),correct=path.join(s.dir,'copycat.mkv');fs.writeFileSync(wrong,'wrong film');fs.writeFileSync(correct,'correct film');
+  s.state.files={wrong:{id:'wrong',path:wrong,filmKey:'m900',state:'linked'},right:{id:'right',path:correct,filmKey:'m901',state:'linked',matchMethod:'manual',role:'normal'}};
+  s.state.nameLinks.correct='m901';const right=structuredClone(s.state.files.right),p=await s.previewFilmCorrection('m900',901),options=mergeOptions(p);options.mergeChoices.status='source';
+  assert.equal(p.targetFiles.length,1);s.applyFilmCorrection(p.token,options);
+  assert.deepEqual(s.state.files.right,right);assert.equal(s.state.files.wrong.state,'orphan');assert.equal(s.state.files.wrong.filmKey,undefined);assert.equal(s.state.nameLinks.correct,'m901');
+  assert.equal(require('../src/archive').pending(s.state).some(f=>f.key==='m901'),false);assert.equal(fs.readFileSync(wrong,'utf8'),'wrong film');assert.equal(fs.readFileSync(correct,'utf8'),'correct film');
+});
+
+test('объединение: архив правильной записи сохраняется, архив ошибочной не присваивается новому фильму',async t=>{
+  const s=mergeFixture(t);s.state.archiveEntries.right={id:'right',root:'/archive',path:'/archive/Copycat.mkv',candidates:['m901'],confirmedKey:'m901',manual:true};
+  const correct=structuredClone(s.state.archiveEntries.right),p=await s.previewFilmCorrection('m900',901),options=mergeOptions(p);options.mergeChoices.status='source';
+  assert.equal(p.targetArchive.length,1);s.applyFilmCorrection(p.token,options);assert.deepEqual(s.state.archiveEntries.right,correct);assert.equal(s.state.archiveEntries.a.confirmedKey,null);
+  const A=require('../src/archive');assert.equal(A.groups(s.state).found.length,1);assert.equal(A.hits(s.state,'m901').length,1);
+});
+
+test('объединение: без обычной или архивной копии фильм остаётся Не найдено — скачать',async t=>{
+  const s=mergeFixture(t),p=await s.previewFilmCorrection('m900',901),options=mergeOptions(p);options.mergeChoices.status='source';s.applyFilmCorrection(p.token,options);
+  const A=require('../src/archive');assert.equal(A.groups(s.state).missing.length,1);assert.equal(A.groups(s.state).possible.length,0);
+});
+
+test('объединение: обычные файлы источника сохраняются только по отдельному подтверждению',async t=>{
+  const s=mergeFixture(t);s.state.files={x:{id:'x',filmKey:'m900',state:'linked',path:'/films/source.mkv'}};
+  const p=await s.previewFilmCorrection('m900',901),options=mergeOptions(p,{keepFiles:true});options.mergeChoices.status='source';s.applyFilmCorrection(p.token,options);
+  assert.equal(s.state.files.x.filmKey,'m901');assert.equal(s.state.files.x.state,'linked');assert.equal(require('../src/archive').pending(s.state).length,0);
+});
+
+test('объединение: ближайшие и альтернативы не дублируются после повторной сборки из импорта',async t=>{
+  const s=mergeFixture(t);s.state.films.m3=film(3,'Другой',2000);s.state.near=[{key:'n1',ids:['m901']},{key:'n2',ids:['m900','m3']}];
+  s.state.job={phase:'done',items:[],nearItems:[],nearEntries:[{key:'n1',refs:[{tmdbId:901}]},{key:'n2',refs:[{tmdbId:900},{tmdbId:3}]}]};
+  const p=await s.previewFilmCorrection('m900',901);s.applyFilmCorrection(p.token,mergeOptions(p));s.rebuildNear();
+  assert.equal(s.state.near.filter(e=>e.ids.includes('m901')).length,1);assert.deepEqual(s.state.near.find(e=>e.key==='n2').ids,['m3']);
+});
+
+test('объединение: одинаковая дата не стирает отдельные просмотры, идентичное событие ночи не дублируется',async t=>{
+  const s=mergeFixture(t),same={date:'2022-01-01',result:'watched'},night={date:'2023-01-01',result:'watched',nightId:'night',slot:0};
+  s.state.films.m900.watched=[same,night];s.state.films.m901.watched=[same,night];
+  const p=await s.previewFilmCorrection('m900',901);s.applyFilmCorrection(p.token,mergeOptions(p));assert.equal(s.state.films.m901.watched.length,3);assert.equal(s.state.films.m901.watched.filter(w=>w.nightId).length,1);
+});
+
+test('объединение: старые результаты ночи защищены от отката поверх объединённых оценок',async t=>{
+  const s=mergeFixture(t);s.state.nights=[{id:'old',slots:[{key:'m900',result:'watched',rating:8,before:{rating:2,near:[]}}],tasks:{'0:file':true},config:{slots:[{film:'m900'}]}}];
+  const p=await s.previewFilmCorrection('m900',901);s.applyFilmCorrection(p.token,mergeOptions(p));const before=structuredClone(s.state);
+  assert.equal(s.state.nights[0].slots[0].mergedFilm,true);assert.throws(()=>s.setNightResult('old',0,null),/исторический/);assert.throws(()=>s.rateNight('old',0,1),/отдельно/);assert.deepEqual(s.state,before);assert.deepEqual(s.state.nights[0].tasks,{});
+});
+
+test('объединение: новое место в полной очереди требует отдельного подтверждения',async t=>{
+  const s=mergeFixture(t);for(let i=3;i<=5;i++)s.state.films['m'+i]=film(i,'Очередь '+i,2000,{dir:2,status:'queue',queueChosen:true});
+  const p=await s.previewFilmCorrection('m900',901),options=mergeOptions(p);options.mergeChoices.status='source';const before=structuredClone(s.state);
+  assert.throws(()=>s.applyFilmCorrection(p.token,options),/сверх трёх/);assert.deepEqual(s.state,before);options.allowExtraQueue=true;s.applyFilmCorrection(p.token,options);
+  assert.equal(Object.values(s.state.films).filter(f=>f.dir===2&&f.status==='queue').length,4);for(let i=3;i<=5;i++)assert.equal(s.state.films['m'+i].status,'queue');
+});
+
+test('объединение: ошибка сохранения и устаревший предпросмотр не теряют существующую запись',async t=>{
+  const s=mergeFixture(t),p=await s.previewFilmCorrection('m900',901),before=structuredClone(s.state),save=s.save.bind(s);
+  const mocked=t.mock.method(s,'save',()=>{throw Error('disk full');});assert.throws(()=>s.applyFilmCorrection(p.token,mergeOptions(p)),/disk full/);assert.deepEqual(s.state,before);assert.deepEqual(new Service({dir:s.dir}).state,before);
+  mocked.mock.restore();s.state.films.m901.rating=10;save();const changed=structuredClone(s.state);assert.throws(()=>s.applyFilmCorrection(p.token,mergeOptions(p)),/изменилась/);assert.deepEqual(s.state,changed);
+});
+
+test('со скриншота: Red Shoe Diaries 5234 объединяется с Guncrazy 24065, существующий фильм сохраняется',async t=>{
+  const s=svc({m5234:film(5234,'Без ума от оружия',1992,{originalTitle:'Red Shoe Diaries',dir:9,rating:7}),m24065:film(24065,'Без ума от оружия',1992,{originalTitle:'Guncrazy',dir:2,status:'queue',rating:9})});
+  t.after(()=>fs.rmSync(s.dir,{recursive:true,force:true}));s.tmdb=fakeTmdb([{id:24065,title:'Без ума от оружия',original_title:'Guncrazy',year:1992,directors:[[2,'Tamra Davis']]}]);
+  s.state.directors[9]={id:9,name:'Zalman King'};s.state.directors[2]={id:2,name:'Tamra Davis'};const p=await s.previewFilmCorrection('m5234',24065);
+  assert.equal(p.target.directors[0].name,'Tamra Davis');assert.equal(p.existing.originalTitle,'Guncrazy');s.applyFilmCorrection(p.token,mergeOptions(p));
+  assert.equal(s.state.films.m5234,undefined);assert.equal(s.state.films.m24065.rating,9);assert.equal(s.state.films.m24065.dir,2);assert.equal(s.state.films.m24065.originalTitle,'Guncrazy');
+});
+
+test('объединение: повторное применение, просрочка и работающий перенос не изменяют обе записи',async t=>{
+  const s=mergeFixture(t),expired=await s.previewFilmCorrection('m900',901);s.filmCorrectionPlans.get(expired.token).expires=0;const before=structuredClone(s.state);
+  assert.throws(()=>s.applyFilmCorrection(expired.token,mergeOptions(expired)),/устарел/);assert.deepEqual(s.state,before);
+  const p=await s.previewFilmCorrection('m900',901);s.transferBusy=true;assert.throws(()=>s.applyFilmCorrection(p.token,mergeOptions(p)),/Дождись/);assert.deepEqual(s.state,before);s.transferBusy=false;
+  s.applyFilmCorrection(p.token,mergeOptions(p));const done=structuredClone(s.state);assert.throws(()=>s.applyFilmCorrection(p.token,mergeOptions(p)),/устарел/);assert.deepEqual(s.state,done);
+});
+
+test('объединение: одинаковые личные значения не требуют лишних выборов, но требуют подтверждения',async t=>{
+  const s=mergeFixture(t);s.state.films.m901={...structuredClone(s.state.films.m900),key:'m901',tmdbId:901,dir:2,directorIds:[2],originalTitle:'Copycat'};s.state.near=[{key:'near',ids:['m900','m901']}];
+  const p=await s.previewFilmCorrection('m900',901);assert.equal(p.conflicts.length,0);assert.throws(()=>s.applyFilmCorrection(p.token,{confirmed:true,keepTitle:true,keepFiles:false}),/Подтверди объединение/);
+  s.applyFilmCorrection(p.token,mergeOptions(p));assert.equal(s.state.films.m901.watched.length,2); // Separate undated-ID-less viewings are not silently discarded.
+});
+
+test('объединение: сбой атомарного переименования JSON оставляет исходную базу читаемой, повторная попытка работает',async t=>{
+  const s=mergeFixture(t),p=await s.previewFilmCorrection('m900',901),before=fs.readFileSync(s.file,'utf8'),rename=fs.renameSync;
+  const mock=t.mock.method(fs,'renameSync',function(from,to){if(to===s.file)throw Error('database permission denied');return rename.call(this,from,to);});
+  assert.throws(()=>s.applyFilmCorrection(p.token,mergeOptions(p)),/permission denied/);assert.equal(fs.readFileSync(s.file,'utf8'),before);assert.ok(new Service({dir:s.dir}).state.films.m900);assert.ok(new Service({dir:s.dir}).state.films.m901);
+  mock.mock.restore();s.applyFilmCorrection(p.token,mergeOptions(p));assert.equal(new Service({dir:s.dir}).state.films.m900,undefined);
+});
+
+test('renderer: существующий фильм доступен для выбора, отмена не меняет базу, подтверждение объединяет',async t=>{
+  const s=mergeFixture(t),r=orphanRenderer((method,...args)=>s[method](...args));r.run(`ui.state=${JSON.stringify(s.state)};ui.screen='download';openFilmCorrection('m900')`);
+  const results=await s.searchFilmCorrection('m900','Имитатор (1995)');r.run(`ui.modal.results=${JSON.stringify(results)}`);
+  const search=r.run('filmCorrectionModal()');assert.ok(search.includes('Выбрать — предпросмотр объединения'));assert.ok(!/disabled[^>]*>Выбрать — предпросмотр объединения/.test(search));
+  await r.run('correctionPreview(901)');const before=structuredClone(s.state),preview=r.run('filmCorrectionModal()');assert.ok(preview.includes('Уже существующая правильная карточка'));assert.equal(r.run("mergeValue('userTitle','light')"),'light');assert.equal(r.run("mergeValue('nightTags.weight','light')"),'Лёгкая');assert.ok(/disabled[^>]*>Подтверждаю — объединить записи/.test(preview));
+  const cancel=preview.match(/data-a="([^"]+)"[^>]*>Отмена/);await r.run(`actions[${JSON.stringify(cancel[1])}]()`);assert.deepEqual(s.state,before);
+  r.run("openFilmCorrection('m900')");await r.run('correctionPreview(901)');r.run("ui.modal.mergeChoices=Object.fromEntries(ui.modal.preview.conflicts.map(c=>[c.field,'target']));ui.modal.mergeConfirmed=true");
+  assert.equal(r.run('mergeReady(ui.modal)'),true);await r.run('correctionApply()');assert.equal(s.state.films.m900,undefined);assert.equal(s.state.films.m901.rating,9);assert.equal(r.run('ui.modal'),null);assert.ok(r.run('ui.toast').includes('Записи объединены'));
+});
+
+test('после объединения новый просмотр и его отмена сохраняют общую историю',async t=>{
+  const s=mergeFixture(t),p=await s.previewFilmCorrection('m900',901),options=mergeOptions(p);options.mergeChoices.status='source';s.applyFilmCorrection(p.token,options);
+  const history=structuredClone(s.state.films.m901.watched),c={...require('../src/planner').defaults(),count:1,nearCount:1,slots:[{...require('../src/planner').slot(),film:'m901'}]};
+  const id=s.approveNight(c,'2026-11-23').nightId;s.setNightResult(id,0,'watched');assert.equal(s.state.films.m901.watched.length,history.length+1);s.setNightResult(id,0,null);assert.deepEqual(s.state.films.m901.watched,history);assert.equal(s.state.films.m901.status,'queue');
+});
+
+test('объединение: ссылка и дополнительные личные данные сохраняются по выбранной карточке',async t=>{
+  const s=mergeFixture(t);s.state.films.m900.kpLink='https://www.kinopoisk.ru/film/1/';s.state.films.m901.kpLink='https://www.kinopoisk.ru/film/2/';s.state.films.m900.personalNote={text:'Моя заметка'};
+  const p=await s.previewFilmCorrection('m900',901),options=mergeOptions(p);options.mergeChoices.kpLink='source';options.mergeChoices['extra:personalNote']='source';s.applyFilmCorrection(p.token,options);
+  assert.equal(s.state.films.m901.kpLink,'https://www.kinopoisk.ru/film/1/');assert.deepEqual(s.state.films.m901.personalNote,{text:'Моя заметка'});
+});
+
+test('объединение: непроверенная архивная копия остаётся в Возможно найдено',async t=>{
+  const s=mergeFixture(t);s.state.archiveEntries.right={id:'right',root:'/archive',path:'/archive/Copycat.mkv',candidates:['m901'],confirmedKey:null,manual:false};
+  const p=await s.previewFilmCorrection('m900',901),options=mergeOptions(p);options.mergeChoices.status='source';s.applyFilmCorrection(p.token,options);
+  const A=require('../src/archive');assert.equal(A.groups(s.state).found.length,0);assert.equal(A.groups(s.state).possible.length,1);assert.equal(s.state.archiveEntries.right.confirmedKey,null);
+});
+
+test('объединение: выбор убрать из ближайших не отменяется последующей сборкой из импорта',async t=>{
+  const s=mergeFixture(t);s.state.job={phase:'done',items:[],nearItems:[],nearEntries:[{key:'near1',refs:[{tmdbId:900}]}]};
+  const p=await s.previewFilmCorrection('m900',901),options=mergeOptions(p);options.mergeChoices.near='target';s.applyFilmCorrection(p.token,options);s.rebuildNear();assert.equal(s.state.near.length,0);
+});
+
+test('объединение: план с обеими записями нужно пересобрать перед новым просмотром',async t=>{
+  const s=mergeFixture(t);s.state.films.m3=film(3,'Другой фильм',2000,{dir:3,runtime:90});s.state.directors[3]={id:3,name:'Третий режиссёр'};
+  s.state.nights=[{id:'night',slots:[{key:'m900',result:null},{key:'m901',result:null}],tasks:{},config:{slots:[{film:'m900'},{film:'m901'}]}}];
+  const p=await s.previewFilmCorrection('m900',901),options=mergeOptions(p);options.mergeChoices.status='source';s.applyFilmCorrection(p.token,options);
+  assert.equal(s.state.nights[0].mergeReviewRequired,true);assert.throws(()=>s.setNightResult('night',0,'watched'),/Пересобери/);
+  const P=require('../src/planner'),c={...P.defaults(),count:2,nearCount:1,slots:[{...P.slot(),film:'m901'},{...P.slot(),film:'m3'}]};s.reviseNight('night',c);assert.equal(s.state.nights[0].mergeReviewRequired,false);s.setNightResult('night',0,'skipped');assert.equal(s.state.nights[0].slots[0].result,'skipped');
 });
