@@ -1439,3 +1439,37 @@ test('предпросмотр: обычная копия приоритетне
   await r.run('correctionPreview(901)');assert.match(r.run('filmCorrectionModal()'),/Есть копия на обычном диске/);
   await r.run('correctionApply()');assert.equal(require('../src/archive').pending(s.state).some(f=>f.key==='m901'),false);assert.equal(s.state.archiveEntries.right.confirmedKey,'m901');
 });
+
+function nightSearchFixture(){
+  const r=orphanRenderer(()=>{throw Error('Unexpected mutation');});
+  r.run(`ui.state={films:{m1:{key:'m1',tmdbId:1,userTitle:'Помнишь ли, Долли Белл?',tmdbTitle:'Помнишь ли, Долли Белл?',originalTitle:'Sjećaš li se Dolly Bell?',altTitles:['Do You Remember Dolly Bell?'],year:1981,dir:1,status:'queue',runtime:107}},directors:{1:{id:1,name:'Эмир Кустурица',tmdbName:'Emir Kusturica',aliases:['Емир Кустурица']}},near:[{key:'near1',ids:['m1']}],files:{}};ui.nightEdit=NightPlanner.defaults();ui.nightEdit.source='all';ui.modal={type:'night-choose',index:0,query:'Помнишь'};`);
+  return r;
+}
+
+test('поиск ночи: Долли Белл находится по русскому/оригинальному/альтернативному названию, году и имени режиссёра',()=>{
+  const r=nightSearchFixture();
+  for(const query of ['Помнишь','помнишь ли долли белл 1981','  ПОМНИШЬ  ','Sjećaš li se Dolly Bell','Do You Remember','Эмир Кустурица','Emir Kusturica','Емир','1981']){
+    r.run(`ui.modal.query=${JSON.stringify(query)}`);const html=r.run('nightModal()');
+    assert.match(html,/Найдено в библиотеке: 1\. Подходят для этого места: 1/);assert.match(html,/Помнишь ли, Долли Белл\?/);
+  }
+  assert.equal(r.run("nSearchText('Ёлки, ёж!')===nSearchText('елки еж')"),true);
+});
+
+test('поиск ночи: неподходящий фильм виден с точной причиной, выбор и изменение условий заблокированы',async()=>{
+  const r=nightSearchFixture();r.run("ui.nightEdit.slots[0].attention='medium'");const before=r.run('JSON.stringify(ui.nightEdit)');
+  const html=r.run('nightModal()');assert.match(html,/Найдено в библиотеке: 1\. Подходят для этого места: 0/);assert.match(html,/Не задана ваша отметка внимания/);assert.match(html,/disabled[^>]*data-a="[^"]+">Выбрать/);
+  await assert.rejects(r.run("nChooseFilm(0,'m1')"),/отметка внимания/);assert.equal(r.run('JSON.stringify(ui.nightEdit)'),before);
+  r.run("ui.nightEdit.slots[0].attention='any';ui.nightEdit.slots[0].source='rest'");assert.match(r.run('nightModal()'),/Фильм не входит в выбранный источник/);
+  r.run("ui.nightEdit.slots[0].source='inherit';ui.nightEdit.source='near';ui.state.near=[]");assert.match(r.run('nightModal()'),/Найдено в библиотеке: 1/);assert.match(r.run('nightModal()'),/Фильм не входит в выбранный источник/);
+  r.run("ui.nightEdit.source='all';ui.nightEdit.rejectedFilms=['m1']");assert.match(r.run('nightModal()'),/Уже отклонён для этой ночи/);
+  await assert.rejects(r.run("nChooseFilm(0,'m1')"),/Уже отклонён/);
+});
+
+test('поиск ночи: найденный допустимый фильм выбирается; без запроса показываются только подходящие',async()=>{
+  const s=svc({m1:film(1,'Помнишь ли, Долли Белл?',1981,{runtime:107})}),r=nightSearchFixture();
+  // Real service validates and persists the selection through the renderer's normal call.
+  const actual=orphanRenderer((method,...args)=>s[method](...args));actual.run(`ui.state=${JSON.stringify(s.state)};ui.nightEdit=NightPlanner.defaults();ui.nightEdit.source='all';ui.modal={type:'night-choose',index:0,query:'Помнишь'};`);
+  await actual.run("nChooseFilm(0,'m1')");assert.equal(s.state.nightDraft.slots[0].film,'m1');assert.equal(s.state.nightDraft.slots[0].locked,true);assert.equal(actual.run('ui.modal'),null);
+  r.run("ui.modal.query='';ui.nightEdit.slots[0].attention='medium'");assert.doesNotMatch(r.run('nightModal()'),/<h3>Помнишь/);
+  r.run("ui.modal.query='Неизвестный фильм'");assert.match(r.run('nightModal()'),/По этому запросу ничего не найдено/);
+});
