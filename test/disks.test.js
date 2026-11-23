@@ -1363,10 +1363,10 @@ test('renderer: существующий фильм доступен для вы
   const s=mergeFixture(t),r=orphanRenderer((method,...args)=>s[method](...args));r.run(`ui.state=${JSON.stringify(s.state)};ui.screen='download';openFilmCorrection('m900')`);
   const results=await s.searchFilmCorrection('m900','Имитатор (1995)');r.run(`ui.modal.results=${JSON.stringify(results)}`);
   const search=r.run('filmCorrectionModal()');assert.ok(search.includes('Выбрать — предпросмотр объединения'));assert.ok(!/disabled[^>]*>Выбрать — предпросмотр объединения/.test(search));
-  await r.run('correctionPreview(901)');const before=structuredClone(s.state),preview=r.run('filmCorrectionModal()');assert.ok(preview.includes('Уже существующая правильная карточка'));assert.equal(r.run("mergeValue('userTitle','light')"),'light');assert.equal(r.run("mergeValue('nightTags.weight','light')"),'Лёгкая');assert.ok(/disabled[^>]*>Подтверждаю — объединить записи/.test(preview));
+  await r.run('correctionPreview(901)');const before=structuredClone(s.state),preview=r.run('filmCorrectionModal()');assert.ok(preview.includes('Это тот же фильм?'));assert.equal(r.run("mergeValue('userTitle','light')"),'light');assert.equal(r.run("mergeValue('nightTags.weight','light')"),'Лёгкая');assert.ok(!/disabled[^>]*>Да, это он/.test(preview));assert.ok(!preview.includes('<select'));assert.ok(!preview.includes('type="checkbox"'));
   const cancel=preview.match(/data-a="([^"]+)"[^>]*>Отмена/);await r.run(`actions[${JSON.stringify(cancel[1])}]()`);assert.deepEqual(s.state,before);
-  r.run("openFilmCorrection('m900')");await r.run('correctionPreview(901)');r.run("ui.modal.mergeChoices=Object.fromEntries(ui.modal.preview.conflicts.map(c=>[c.field,'target']));ui.modal.mergeConfirmed=true");
-  assert.equal(r.run('mergeReady(ui.modal)'),true);await r.run('correctionApply()');assert.equal(s.state.films.m900,undefined);assert.equal(s.state.films.m901.rating,9);assert.equal(r.run('ui.modal'),null);assert.ok(r.run('ui.toast').includes('Записи объединены'));
+  r.run("openFilmCorrection('m900')");await r.run('correctionPreview(901)');
+  await r.run('correctionApply()');assert.equal(s.state.films.m900,undefined);assert.equal(s.state.films.m901.rating,9);assert.equal(r.run('ui.modal'),null);assert.ok(r.run('ui.toast').includes('Записи объединены'));
 });
 
 test('после объединения новый просмотр и его отмена сохраняют общую историю',async t=>{
@@ -1398,4 +1398,44 @@ test('объединение: план с обеими записями нужн
   const p=await s.previewFilmCorrection('m900',901),options=mergeOptions(p);options.mergeChoices.status='source';s.applyFilmCorrection(p.token,options);
   assert.equal(s.state.nights[0].mergeReviewRequired,true);assert.throws(()=>s.setNightResult('night',0,'watched'),/Пересобери/);
   const P=require('../src/planner'),c={...P.defaults(),count:2,nearCount:1,slots:[{...P.slot(),film:'m901'},{...P.slot(),film:'m3'}]};s.reviseNight('night',c);assert.equal(s.state.nights[0].mergeReviewRequired,false);s.setNightResult('night',0,'skipped');assert.equal(s.state.nights[0].slots[0].result,'skipped');
+});
+
+test('простое подтверждение: данные разобранной карточки главные, ссылка не блокирует, история объединена',async t=>{
+  const s=mergeFixture(t);s.state.films.m900.kpLink='https://kinopoisk.ru/film/1/';s.state.films.m900.correctionReview=true;
+  const p=await s.previewFilmCorrection('m900',901),target=structuredClone(s.state.films.m901);
+  s.applyFilmCorrection(p.token,{confirmed:true,keepTitle:true,keepFiles:false,mergeConfirmed:true,useExisting:true});
+  const f=s.state.films.m901;for(const field of ['userTitle','status','rating'])assert.deepEqual(f[field],target[field]);
+  assert.equal(f.nightTags.attention,target.nightTags.attention);assert.equal(f.nightTags.weight,'unknown');assert.equal(f.kpLink,null);assert.equal(f.watched.length,2);assert.equal(f.correctionReview,undefined);
+  assert.equal(s.state.filmCorrections.at(-1).before.kpLink,'https://kinopoisk.ru/film/1/');
+});
+
+test('Нет — в разбор: обе записи и файлы сохранены, метка доступна после перезапуска',async t=>{
+  const s=mergeFixture(t),before=structuredClone(s.state),p=await s.previewFilmCorrection('m900',901);
+  s.rejectFilmCorrection(p.token);const expected=structuredClone(before);expected.films.m900.correctionReview=true;assert.deepEqual(s.state,expected);
+  const loaded=new Service({dir:s.dir});assert.equal(loaded.state.films.m900.correctionReview,true);
+  const r=orphanRenderer((method,...args)=>s[method](...args));r.run(`ui.state=${JSON.stringify(s.state)}`);
+  const html=r.run('archiveDownload()');assert.match(html,/Нужно разобрать · 1/);assert.match(html,/ручного поиска/);
+  assert.throws(()=>s.rejectFilmCorrection(p.token),/устарел/);
+});
+
+test('отказ: renderer переносит в разбор; повторное исправление снимает метку',async t=>{
+  const s=mergeFixture(t),r=orphanRenderer((method,...args)=>s[method](...args));r.run(`ui.state=${JSON.stringify(s.state)};openFilmCorrection('m900')`);
+  await r.run('correctionPreview(901)');await r.run('correctionReject()');assert.equal(r.run('ui.modal'),null);assert.equal(s.state.films.m900.correctionReview,true);
+  delete s.state.films.m901;const p=await s.previewFilmCorrection('m900',901);s.applyFilmCorrection(p.token,{confirmed:true,keepTitle:true,keepFiles:false});assert.equal(s.state.films.m901.correctionReview,undefined);
+});
+
+test('отказ: устаревшая база, перенос и ошибка записи не меняют карточки',async t=>{
+  const s=mergeFixture(t),p=await s.previewFilmCorrection('m900',901),before=structuredClone(s.state);
+  s.transferBusy=true;assert.throws(()=>s.rejectFilmCorrection(p.token),/Дождись/);s.transferBusy=false;
+  const mock=t.mock.method(s,'save',()=>{throw Error('disk full');});assert.throws(()=>s.rejectFilmCorrection(p.token),/disk full/);assert.deepEqual(s.state,before);mock.mock.restore();
+  s.state.films.m901.rating=10;const changed=structuredClone(s.state);assert.throws(()=>s.rejectFilmCorrection(p.token),/изменилась/);assert.deepEqual(s.state,changed);
+});
+
+test('предпросмотр: обычная копия приоритетнее NAS, старые архивные files не считаются обычными',async t=>{
+  const s=mergeFixture(t);s.state.films.m901.status='queue';s.state.files={a:{id:'a',filmKey:'m901',state:'linked',path:'/archive/a.mkv',role:'archive'}};
+  s.state.archiveEntries.right={id:'right',root:'/archive',path:'/archive/Copycat.mkv',candidates:['m901'],confirmedKey:'m901'};
+  const r=orphanRenderer((method,...args)=>s[method](...args));r.run(`ui.state=${JSON.stringify(s.state)};openFilmCorrection('m900')`);await r.run('correctionPreview(901)');assert.match(r.run('filmCorrectionModal()'),/Останется в «Найдено на резервном NAS»/);
+  s.state.files.b={id:'b',filmKey:'m901',state:'linked',path:'/local/copycat.mkv',role:'normal'};
+  await r.run('correctionPreview(901)');assert.match(r.run('filmCorrectionModal()'),/Есть копия на обычном диске/);
+  await r.run('correctionApply()');assert.equal(require('../src/archive').pending(s.state).some(f=>f.key==='m901'),false);assert.equal(s.state.archiveEntries.right.confirmedKey,'m901');
 });

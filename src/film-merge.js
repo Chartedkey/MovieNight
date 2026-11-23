@@ -1,7 +1,7 @@
 'use strict';
 const clone=x=>JSON.parse(JSON.stringify(x));
 const equal=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
-const meta=new Set('key tmdbId tmdbTitle originalTitle year runtime countries countryCodes genres genreIds altTitles overview poster popularity voteAverage voteCount dir directorIds kpLink watched titleSource pending moveTask queueChosen nightTags'.split(' '));
+const meta=new Set('correctionReview key tmdbId tmdbTitle originalTitle year runtime countries countryCodes genres genreIds altTitles overview poster popularity voteAverage voteCount dir directorIds kpLink watched titleSource pending moveTask queueChosen nightTags'.split(' '));
 const fields=[['status','Статус',f=>f.status||'candidate'],['rating','Оценка',f=>f.rating??null],['userTitle','Личное название',f=>f.userTitle||null],['kpLink','Личная ссылка на Кинопоиск',f=>f.kpLink||null],['wish','Хочу посмотреть',f=>!!f.wish],['rewatch','Пересмотреть',f=>!!f.rewatch],['keepOnDisk','Оставить на диске',f=>!!f.keepOnDisk],['dupOk','Несколько копий разрешены',f=>!!f.dupOk]];
 const tags=[['weight','Эмоциональная нагрузка','unknown'],['attention','Требуемое внимание','unknown'],['styles','Нуар / неонуар',[]],['runtime','Ручная длительность',null]];
 function values(state,source,target){

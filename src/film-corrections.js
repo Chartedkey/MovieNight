@@ -2,6 +2,7 @@
 const {randomUUID,createHash}=require('crypto');
 const {searchFilm}=require('./matcher');
 const Merge=require('./film-merge');
+const Archive=require('./archive');
 const clone=x=>JSON.parse(JSON.stringify(x));
 const signature=state=>createHash('sha256').update(JSON.stringify(state)).digest('hex');
 function idle(s){
@@ -34,8 +35,8 @@ const correctionMethods={
     const queue={count:Object.values(this.state.films).filter(f=>f.dir===d.directors[0].id&&f.status==='queue'&&![key,newKey].includes(f.key)).length,growsIfQueue:!!existing&&existing.status!=='queue'&&!(old.status==='queue'&&old.dir===d.directors[0].id)};
     const files=Object.values(this.state.files||{}).filter(e=>e.filmKey===key).map(e=>({id:e.id,path:e.path}));
     const archive=Object.values(this.state.archiveEntries||{}).filter(e=>e.confirmedKey===key||e.candidates?.includes(key)).map(e=>({id:e.id,path:e.path}));
-    const targetFiles=existing?Object.values(this.state.files||{}).filter(e=>e.filmKey===newKey&&e.state==='linked').map(e=>({id:e.id,path:e.path})):[];
-    const targetArchive=existing?Object.values(this.state.archiveEntries||{}).filter(e=>e.confirmedKey===newKey||e.candidates?.includes(newKey)).map(e=>({id:e.id,path:e.path,confirmed:e.confirmedKey===newKey})):[];
+    const targetFiles=existing?Object.values(this.state.files||{}).filter(e=>e.filmKey===newKey&&e.state==='linked'&&!Archive.isArchive(this.state,e)).map(e=>({id:e.id,path:e.path})):[];
+    const targetArchive=existing?Archive.hits(this.state,newKey).map(e=>({id:e.id,path:e.path,confirmed:e.confirmedKey===newKey})):[];
     const token=randomUUID(),plan={key,newKey,old,d,before,files,archive,existing,mergeFields,queue,expires:Date.now()+15*60*1000};
     this.filmCorrectionPlans=this.filmCorrectionPlans||new Map();
     for(const [id,p] of this.filmCorrectionPlans)if(p.expires<Date.now())this.filmCorrectionPlans.delete(id);
@@ -43,11 +44,26 @@ const correctionMethods={
     this.filmCorrectionPlans.set(token,plan);
     return {token,old,existing,queue,conflicts:mergeFields.filter(f=>!Merge.equal(f.source,f.target)).map(({field,label,source,target})=>({field,label,source,target})),targetFiles,targetArchive,target:{key:newKey,tmdbId:d.id,tmdbTitle:d.title||d.displayTitle||d.originalTitle,originalTitle:d.originalTitle,year:d.year,poster:d.poster,directors:d.directors,runtime:d.runtime,overview:d.overview},files,archive};
   },
+  rejectFilmCorrection(token){
+    idle(this);const plan=this.filmCorrectionPlans?.get(token);
+    if(!plan||plan.expires<Date.now())throw Error('Предпросмотр устарел. Открой его заново.');
+    if(!plan.existing)throw Error('Нет существующей карточки для проверки.');
+    if(signature(this.state)!==plan.before)throw Error('База изменилась. Открой предпросмотр заново.');
+    const previous=this.state;this.state=clone(previous);
+    this.state.films[plan.key].correctionReview=true;
+    try{this.save();}catch(e){this.state=previous;throw e;}
+    this.filmCorrectionPlans.delete(token);
+    return this.state;
+  },
   applyFilmCorrection(token,options={}){
     idle(this);const plan=this.filmCorrectionPlans?.get(token);
     if(!plan||plan.expires<Date.now())throw Error('Предпросмотр устарел. Открой его заново.');
     if(options.confirmed!==true||typeof options.keepTitle!=='boolean'||typeof options.keepFiles!=='boolean')throw Error('Подтверди замену фильма и настройки сохранения.');
     if(signature(this.state)!==plan.before)throw Error('База изменилась. Открой предпросмотр заново.');
+    if(options.useExisting===true){
+      if(!plan.existing)throw Error('Существующая карточка не найдена.');
+      options={...options,keepFiles:false,mergeChoices:Object.fromEntries(plan.mergeFields.map(f=>[f.field,'target']))};
+    }
     const resolution=plan.existing?Merge.selected(plan,options):null;
     const previous=this.state,next=clone(previous),{key,newKey,d,old}=plan;
     this.state=next;
@@ -74,6 +90,7 @@ const correctionMethods={
         Merge.freezeHistory(next,key,newKey,options.keepFiles);
       }
 
+      delete corrected.correctionReview;
       mapNear(next.near,key,newKey);
       mapConfig(next.nightDraft,key,newKey);
       for(const template of next.nightTemplates||[])mapConfig(template.config,key,newKey);
