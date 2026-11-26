@@ -1473,3 +1473,23 @@ test('поиск ночи: найденный допустимый фильм в
   r.run("ui.modal.query='';ui.nightEdit.slots[0].attention='medium'");assert.doesNotMatch(r.run('nightModal()'),/<h3>Помнишь/);
   r.run("ui.modal.query='Неизвестный фильм'");assert.match(r.run('nightModal()'),/По этому запросу ничего не найдено/);
 });
+
+test('конфликт имён: показаны оба пути, обе копии и связи остаются без изменений',async t=>{
+  const s=svc({m1:film(1,'Песня для изгоя',1997)});t.after(()=>fs.rmSync(s.dir,{recursive:true,force:true}));
+  const source=path.join(s.dir,'Старое.mkv'),target=path.join(s.dir,'Песня для изгоя (1997).mkv');fs.writeFileSync(source,'source film');fs.writeFileSync(target,'different film');
+  s.state.files={x:{id:'x',filmKey:'m1',path:source,name:'Старое.mkv',title:'Старое',kind:'file',state:'linked',matchMethod:'manual',year:1997}};s.save();const before=structuredClone(s.state.files);
+  const r=await s.applyRename(['x'],['x']);assert.equal(r.failed.length,1);const failure=r.failed[0];
+  assert.equal(failure.id,'x');assert.equal(failure.code,'NAME_EXISTS');assert.equal(failure.fromPath,source);assert.equal(failure.toPath,target);assert.match(failure.why,/не перезаписан/);
+  assert.equal(fs.readFileSync(source,'utf8'),'source film');assert.equal(fs.readFileSync(target,'utf8'),'different film');assert.deepEqual(s.state.files,before);assert.equal(s.state.renameLog.length,0);assert.deepEqual(new Service({dir:s.dir}).state.files,before);
+  const ui=orphanRenderer((method,...args)=>s[method](...args));ui.run(`ui.state=${JSON.stringify(s.state)};ui.planFailed=${JSON.stringify(r.failed)}`);
+  const html=ui.run(`renameFailure(ui.planFailed[0])`);assert.ok(html.includes(source));assert.ok(html.includes(target));assert.match(html,/Занятый путь/);assert.match(html,/Ввести другое имя/);assert.match(html,/Открыть исходник/);
+  const action=[...html.matchAll(/data-a="([^"]+)"[^>]*>([^<]+)/g)].find(m=>m[2]==='Ввести другое имя');ui.run(`actions[${JSON.stringify(action[1])}]()`);assert.equal(ui.run('ui.modal.type'),'file-name');
+  ui.run("document.getElementById=()=>({value:'Песня для изгоя — копия (1997)'})");const modal=ui.run('modal()'),save=[...modal.matchAll(/data-a="([^"]+)"[^>]*>([^<]+)/g)].find(m=>m[2]==='Сохранить предложение');await ui.run(`actions[${JSON.stringify(save[1])}]()`);
+  assert.equal(ui.run('ui.planFailed.length'),0);assert.equal(s.state.files.x.customName,'Песня для изгоя — копия (1997)');assert.equal(fs.readFileSync(source,'utf8'),'source film');assert.equal(fs.readFileSync(target,'utf8'),'different film');
+});
+
+test('сообщение переименования экранирует пути и поддерживает прежний ответ без путей',()=>{
+  const r=orphanRenderer(()=>{});const html=r.run(`renameFailure({from:'<b>фильм</b>',why:'ошибка',fromPath:'/tmp/<source>.mkv',toPath:'/tmp/<target>.mkv',code:'NAME_EXISTS'})`);
+  assert.match(html,/&lt;source&gt;/);assert.match(html,/&lt;target&gt;/);assert.doesNotMatch(html,/<b>фильм/);
+  assert.match(r.run("renameFailure({from:'Фильм',why:'имя занято'})"),/Фильм: имя занято/);
+});

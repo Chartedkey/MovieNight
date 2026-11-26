@@ -366,7 +366,11 @@ const diskMethods = {
       const to = path.join(p.dir, p.to);
       try {
         if (p.requiresConfirmation && !confirmedIds.includes(p.id)) throw new Error('Сначала подтверди фильм и год для этой строки.');
-        if (fs.existsSync(to)) throw new Error('имя занято');
+        if (fs.existsSync(to)) {
+          const caseOnly=process.platform==='win32'&&from.toLowerCase()===to.toLowerCase();
+          const err=new Error(caseOnly?'Меняется только регистр букв: Windows считает это тем же именем. Текущее имя сохранено.':'По новому пути уже существует файл или папка. Переименование пропущено, существующий объект не перезаписан.');
+          err.renameCode=caseOnly?'CASE_ONLY':'NAME_EXISTS';throw err;
+        }
         await fs.promises.rename(from, to);
         log.push({ from, to, at: new Date().toISOString() });
         const e = this.entries()[p.id];
@@ -375,7 +379,7 @@ const diskMethods = {
         this.entries()[nid] = { ...e, id: nid, path: to, name: p.to, video: e.video && e.video.startsWith(from) ? to + e.video.slice(from.length) : e.video };
         Object.assign(this.entries()[nid], parseName(p.to, e.kind === 'file'));
       } catch (err) {
-        failed.push({ from: p.from, why: err.message });
+        failed.push({ id: p.id, from: p.from, to: p.to, fromPath: from, toPath: to, code: err.renameCode || 'RENAME_FAILED', why: err.message });
       }
     }
     this.save();

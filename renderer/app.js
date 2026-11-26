@@ -424,6 +424,11 @@ function clearAllRenames() {
   render();
 }
 
+function renameFailure(x){
+  const entry=ui.state.files?.[x.id];
+  return `<div class="error"><strong>${esc(x.from)}: ${esc(x.why)}</strong>${x.fromPath?`<div class="path">Исходный путь: ${esc(x.fromPath)}</div>`:''}${x.toPath?`<div class="path">${x.code==='NAME_EXISTS'?'Занятый путь':'Предлагаемый путь'}: ${esc(x.toPath)}</div>`:''}${x.code==='NAME_EXISTS'?'<p class="sub">Сравни оба объекта в проводнике. Если нужны обе копии — задай другое имя. Если переименование не требуется — выбери «Оставить как есть» у фильма. Совпадение имени не доказывает, что это один фильм.</p>':''}${entry?`<div class="row"><button class="mini" data-a="${on(()=>call('openEntry',x.id))}">Открыть исходник</button><button class="mini" data-a="${on(()=>{ui.modal={type:'file-name',id:x.id,name:x.to||entry.name};render();})}">Ввести другое имя</button></div>`:''}</div>`;
+}
+
 function renameCard(p) {
   const f = ui.state.films[p.filmKey] || {};
   const reasons = { manual: 'Ты подтвердил фильм вручную', memory: 'Сохранённая связь по названию и году', name: 'Только по совпадению названия в библиотеке', 'name-year': 'По совпадению названия и года', 'name-near-year': 'По названию и году с расхождением в один год', duration: 'По названию и близкой длительности', moved: 'По прежней связи при перемещении', unknown: 'Связь из прежней версии: способ сопоставления не сохранён' };
@@ -475,7 +480,7 @@ function disks() {
       const rows = ui.plan.filter(renameSelected);
       const r = await call('applyRename', rows.map((p) => p.id), rows.filter((p) => p.requiresConfirmation).map((p) => p.id));
       ui.state = r.state; ui.planFailed = r.failed; await loadDiskExtras(); render();
-    })}">Переименовать выбранные (${selected.length})</button></div><div class="sub">Показано ${Math.min(ui.renameShown,ui.plan.length)} из ${ui.plan.length}. Массовый выбор действует на весь список.</div></section>${ui.planFailed.map((x) => `<div class="error">${esc(x.from)}: ${esc(x.why)}</div>`).join('')}<div class="list">${ui.plan.slice(0, ui.renameShown).map(renameCard).join('') || '<div class="card sub">Предложений по переименованию нет.</div>'}</div>${ui.plan.length > ui.renameShown ? `<button class="btn" data-a="${on(()=>{ui.renameShown+=300;render();})}">Показать ещё</button>` : ''}${(s.renameLog || []).length ? `<section class="card"><h2>Журнал переименований</h2>${s.renameLog.map((l, i) => ({ l, i })).reverse().slice(0, 50).map(({ l, i }) => `<div class="film"><div class="path">${esc(l.from)} → ${esc(l.to)}</div><button class="mini" data-a="${on(async () => { await call('undoRename', i); await refresh(); await loadDiskExtras(); })}">Отменить</button></div>`).join('')}</section>` : ''}`;
+    })}">Переименовать выбранные (${selected.length})</button></div><div class="sub">Показано ${Math.min(ui.renameShown,ui.plan.length)} из ${ui.plan.length}. Массовый выбор действует на весь список.</div></section>${ui.planFailed.map(renameFailure).join('')}<div class="list">${ui.plan.slice(0, ui.renameShown).map(renameCard).join('') || '<div class="card sub">Предложений по переименованию нет.</div>'}</div>${ui.plan.length > ui.renameShown ? `<button class="btn" data-a="${on(()=>{ui.renameShown+=300;render();})}">Показать ещё</button>` : ''}${(s.renameLog || []).length ? `<section class="card"><h2>Журнал переименований</h2>${s.renameLog.map((l, i) => ({ l, i })).reverse().slice(0, 50).map(({ l, i }) => `<div class="film"><div class="path">${esc(l.from)} → ${esc(l.to)}</div><button class="mini" data-a="${on(async () => { await call('undoRename', i); await refresh(); await loadDiskExtras(); })}">Отменить</button></div>`).join('')}</section>` : ''}`;
   }
   if (ui.diskTab === 'rename') {
     const kept = es.filter(e=>e.renamePreference==='keep');
@@ -576,7 +581,7 @@ function modal() {
     const e = ui.state.files[m.id];
     const ext = e.kind === 'file' ? String(e.path).match(/\.[^./\\]+$/)?.[0] || '' : '';
     const bodyName = ext && m.name.toLowerCase().endsWith(ext.toLowerCase()) ? m.name.slice(0,-ext.length) : m.name;
-    body = `<div class="sub">Расширение ${esc(ext||'(папка)')} сохраняется отдельно. Название в библиотеке и имена других копий не меняются. Год введи в самом имени, если он нужен.</div><input id="custom-file-name" class="field wide" value="${esc(bodyName)}"><button class="btn primary" data-a="${on(async()=>{await doState('setRenamePreference',m.id,'custom',document.getElementById('custom-file-name').value);ui.modal=null;await loadDiskExtras();render();})}">Сохранить предложение</button>`;
+    body = `<div class="sub">Расширение ${esc(ext||'(папка)')} сохраняется отдельно. Название в библиотеке и имена других копий не меняются. Год введи в самом имени, если он нужен.</div><input id="custom-file-name" class="field wide" value="${esc(bodyName)}"><button class="btn primary" data-a="${on(async()=>{await doState('setRenamePreference',m.id,'custom',document.getElementById('custom-file-name').value);ui.planFailed=ui.planFailed.filter(x=>x.id!==m.id);ui.modal=null;await loadDiskExtras();render();})}">Сохранить предложение</button>`;
   }
   if (m.type === 'queue') {
     const q = directorQueue(m.tmdbId);
